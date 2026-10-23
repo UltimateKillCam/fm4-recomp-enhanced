@@ -1,5 +1,5 @@
 extracted/
-sdk/
+/sdk/
 seed-user-data/
 fm4-locality-test/
 fm4/generated/
@@ -22,3 +22,8 @@ disc2-content/
 fm4/fm4_manifest.local.toml
 .local/
 release-out/
+__pycache__/
+*.pyc
+/textures/
+*.dds
+*.xds

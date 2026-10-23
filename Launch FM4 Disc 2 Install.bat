@@ -12,4 +12,6 @@ if not exist "%FM4_DISC2_ROOT%\" (
   exit /b 2
 )
 
-pwsh -NoProfile -File "%~dp0tools\Run-Local.ps1" -GameDataRoot "%~dp0extracted" -Disc2ContentRoot "%FM4_DISC2_ROOT%"
+set "FM4_GAME_ROOT=%~dp0extracted"
+if exist "%~dp0.local\game-disc1\default.xex" set "FM4_GAME_ROOT=%~dp0.local\game-disc1"
+call "%~dp0tools\Run-PowerShell.cmd" -NoProfile -File "%~dp0tools\Run-Local.ps1" -GameDataRoot "%FM4_GAME_ROOT%" -Disc2ContentRoot "%FM4_DISC2_ROOT%"

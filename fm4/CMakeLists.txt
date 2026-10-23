@@ -1,3 +1,4 @@
+# Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 # fm4 - ReXGlue Recompiled Project
 #
 # SDK boilerplate lives in generated/rexglue.cmake.
@@ -18,12 +19,57 @@ set(FM4_SOURCES
 )
 
 if(WIN32)
+    list(APPEND FM4_SOURCES src/wheel_host.cpp src/wheel_driver.cpp src/wheel_hooks.cpp)
     add_executable(fm4 WIN32 ${FM4_SOURCES})
+    target_link_libraries(fm4 PRIVATE dinput8 dxguid ole32 user32)
+    # Read-only DirectInput reader for the launcher's live control binding page.
+    add_executable(fm4-input src/input_capture.cpp)
+    target_compile_features(fm4-input PRIVATE cxx_std_20)
+    target_link_libraries(fm4-input PRIVATE dinput8 dxguid ole32 user32)
 else()
     add_executable(fm4 ${FM4_SOURCES})
 endif()
 
 rexglue_setup_target(fm4 GPU_PLUGINS xenos)
+
+# Opt-in native data adaptation. Generated PPC modules/entry configuration
+# remain original. Review the separate receipt installer before enabling.
+# Built by default on Windows; the launcher toggle stays off until the user enables it.
+set(fm4_pfp_default OFF)
+if(WIN32)
+    set(fm4_pfp_default ON)
+endif()
+option(FM4_ENABLE_FORZA_PLUS_NATIVE "Build native Forza Plus receipt/resource hook" ${fm4_pfp_default})
+if(FM4_ENABLE_FORZA_PLUS_NATIVE)
+    if(NOT WIN32)
+        message(FATAL_ERROR "Current native Forza Plus verifier requires Windows CNG/file leases")
+    endif()
+    find_path(FM4_PFP_JSON_INCLUDE_DIR nlohmann/json.hpp HINTS
+        "${REXSDK_DIR}/thirdparty/inja/third_party/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../.local/rexglue-enhanced-sdk/thirdparty/inja/third_party/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../.local/rexglue-sdk/thirdparty/inja/third_party/include")
+    if(NOT FM4_PFP_JSON_INCLUDE_DIR)
+        # Official v3.11.3 single header and its MIT notice, both content pinned.
+        set(FM4_PFP_JSON_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/fm4-pfp-json/include")
+        file(MAKE_DIRECTORY "${FM4_PFP_JSON_INCLUDE_DIR}/nlohmann")
+        file(DOWNLOAD "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp"
+            "${FM4_PFP_JSON_INCLUDE_DIR}/nlohmann/json.hpp"
+            EXPECTED_HASH SHA256=9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6 TLS_VERIFY ON)
+        file(DOWNLOAD "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/LICENSE.MIT"
+            "${FM4_PFP_JSON_INCLUDE_DIR}/nlohmann/LICENSE.MIT"
+            EXPECTED_HASH SHA256=c983d69523377819db3c377b390d5644f5ec53bec9b7c4a0f1ed893bb743d045 TLS_VERIFY ON)
+    endif()
+    # These are the only two current TUs including fm4_app.h. Avoid changing
+    # command lines for the thousands of generated PPC source files.
+    set_property(SOURCE src/main.cpp src/fm4_app.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS FM4_ENABLE_FORZA_PLUS_NATIVE=1)
+    set_property(SOURCE src/fm4_app.cpp APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${FM4_PFP_JSON_INCLUDE_DIR}")
+    target_link_libraries(fm4 PRIVATE bcrypt)
+    add_executable(fm4-pfp-resource-export src/forza_plus/resource_export.cpp)
+    target_compile_features(fm4-pfp-resource-export PRIVATE cxx_std_23)
+    target_link_libraries(fm4-pfp-resource-export PRIVATE rex::runtime bcrypt)
+endif()
 
 set(FM4_REGISTER_CPP
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/fm4_register.cpp"

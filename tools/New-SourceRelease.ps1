@@ -1,3 +1,4 @@
+# Modified 2026-10-18. Provenance output stays byte-stable on Windows PowerShell 5.1 and PowerShell 7.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidatePattern("^[0-9A-Za-z][0-9A-Za-z.-]*$")][string]$Version,
@@ -37,7 +38,7 @@ $packageRoot = Join-Path $temporaryRoot $baseName
 
 try {
     $allowlistPath = Join-Path $root $policy.source_allowlist
-    $allowlist = @(Get-Content -LiteralPath $allowlistPath | ForEach-Object { $_.Trim().Replace("\", "/") } | Where-Object { $_ -and -not $_.StartsWith("#") } | Sort-Object)
+    $allowlist = @(Get-Content -LiteralPath $allowlistPath | ForEach-Object { $_.Trim().Replace("\", "/") } | Where-Object { $_ -and -not $_.StartsWith("#") })
     foreach ($relativePath in $allowlist) {
         $source = Join-Path $root $relativePath
         $destination = Join-Path $packageRoot $relativePath
@@ -67,25 +68,13 @@ try {
         sdk_commit = $policy.sdk.commit
         payload = $payloadRecords
     }
-    $provenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $packageRoot "SOURCE-PROVENANCE.json") -Encoding utf8NoBOM
+    $provenanceJson = ConvertTo-Json -InputObject $provenance -Depth 8 -Compress
+    Write-Fm4Utf8File -Path (Join-Path $packageRoot "SOURCE-PROVENANCE.json") -Text ($provenanceJson + "`n")
 
-    Add-Type -AssemblyName System.IO.Compression
-    $archive = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
-    try {
-        $files = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Sort-Object { $_.FullName.Substring($temporaryRoot.Length) })
-        foreach ($file in $files) {
-            $relative = $file.FullName.Substring($temporaryRoot.Length + 1).Replace("\", "/")
-            $entry = $archive.CreateEntry($relative, [IO.Compression.CompressionLevel]::NoCompression)
-            $entry.LastWriteTime = [DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
-            $input = $file.OpenRead()
-            $output = $entry.Open()
-            try { $input.CopyTo($output) }
-            finally { $output.Dispose(); $input.Dispose() }
-        }
+    if (-not ("Fm4.Release.SourceArchive" -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot "SourceArchive.cs")
     }
-    finally {
-        $archive.Dispose()
-    }
+    [Fm4.Release.SourceArchive]::Create($temporaryRoot, $zipPath)
 
     $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
     "$zipHash  $([IO.Path]::GetFileName($zipPath))" | Set-Content -LiteralPath $checksumPath -Encoding ascii

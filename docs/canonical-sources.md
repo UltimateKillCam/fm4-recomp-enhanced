@@ -1,18 +1,22 @@
-# Canonical documentation sources
+# Documentation index
 
-| Topic | Authority |
-|---|---|
-| Overview and quick start | [README](../README.md) |
-| Player package setup | [Player instructions](PLAYING.md) |
-| Tested behavior and limitations | [Current status](STATUS.md) |
-| Build constraints | [Build notes](../BUILD-NOTES.md) |
-| Runtime configuration | [`fm4/fm4_runtime.toml`](../fm4/fm4_runtime.toml) |
-| Recompilation inputs and modules | [`fm4/fm4_manifest.toml`](../fm4/fm4_manifest.toml) |
-| Reusable research and upstream work | [Contributions](CONTRIBUTIONS.md) |
-| License and third-party content boundary | [License and content boundary](LEGAL.md) |
-| Release contents and workflow | [Release process](RELEASING.md) |
-| Published release summary | [Release notes](RELEASE_NOTES.md) |
-| Enforced release policy and input identities | [`release/release-policy.json`](../release/release-policy.json) |
+Modified 2026-10-23.
 
-Code, configuration, and tests take precedence over narrative documentation.
-Update the authority in the same change as the behavior it describes.
+| Topic | Source |
+| --- | --- |
+| Edition overview and requirements | [README](../README.md) |
+| Build and launch | [Build notes](../BUILD-NOTES.md) |
+| Known limitations | [Current status](STATUS.md) |
+| Wheel and controller settings | [Wheel support](WHEEL_SUPPORT.md) |
+| Optional community mod | [Forza Plus 4](FORZA_PLUS.md) |
+| Graphics settings | [Enhancements](ENHANCEMENTS.md) |
+| Importing texture packs | [Texture packs](TEXTURE_PACKS.md) |
+| Experimental neural pass | [Neural Rendering](NEURAL_RENDERING.md) |
+| Runtime defaults | [fm4_runtime.toml](../fm4/fm4_runtime.toml) |
+| Recompilation inputs | [fm4_manifest.toml](../fm4/fm4_manifest.toml) |
+| Builder contributions | [Contributions](CONTRIBUTIONS.md) |
+| Licensing | [Legal](LEGAL.md), [third-party notices](../THIRD_PARTY_NOTICES.md) |
+| Release contents and workflow | [Releasing](RELEASING.md) |
+| Release summary | [Release notes](RELEASE_NOTES.md) |
+
+Code, configuration and tests take precedence over narrative documentation.

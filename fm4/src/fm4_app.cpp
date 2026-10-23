@@ -1,7 +1,23 @@
+// Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 #include "generated/default/fm4_init.h"
 
 #include "fm4_app.h"
+#ifdef FM4_ENABLE_FORZA_PLUS_NATIVE
+#include <rex/logging.h>
+#include "forza_plus/native_app_hooks.inc"
+#endif
+#include "../../tools/wheel/quiet_capture.h"
+#include <rex/system/interfaces/graphics.h>
+#ifdef _WIN32
+#include "wheel_driver.h"
+#endif
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
@@ -30,9 +46,16 @@ namespace {
 constexpr uint32_t kFm4TitleId = 0x4D530910;
 constexpr std::string_view kDisc2DropDirectory = "disc2-content";
 
+// The four Disc 2 packages, or a downloadable content package named by its 42-digit
+// content ID. Either way the STFS header must still be FM4 marketplace content.
+// DLC support added 2026-10-23.
 bool IsDisc2PackageName(std::string_view name) {
-  return name == "4d53091000000001" || name == "4d53091000000002" ||
-         name == "4d53091000000003" || name == "4d53091000000004";
+  if (name == "4d53091000000001" || name == "4d53091000000002" ||
+      name == "4d53091000000003" || name == "4d53091000000004") {
+    return true;
+  }
+  return name.size() == 42 &&
+         name.find_first_not_of("0123456789abcdefABCDEF") == std::string_view::npos;
 }
 
 std::string Hex8(uint32_t value) {
@@ -118,7 +141,53 @@ DiscoverSourceDirectories(const std::filesystem::path &app_root,
 
 } // namespace
 
+void Fm4App::OnPreSetup(rex::RuntimeConfig& config) {
+#ifdef _WIN32
+  // Windows 11 puts background windows in efficiency mode (EcoQoS), slowing the
+  // emulator threads while the game is not focused: audio starves and frames drop.
+  PROCESS_POWER_THROTTLING_STATE throttling{};
+  throttling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  throttling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+  throttling.StateMask = 0;
+  const bool unthrottled = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling,
+      &throttling, sizeof(throttling)) != FALSE;
+  REXLOG_INFO("FM4 background power throttling {}", unthrottled ? "disabled" : "unchanged (not supported)");
+  const auto profile = user_data_root() / "wheel.ini";
+  config.input_factory = [profile](bool tool_mode) {
+    return fm4::wheel::CreateInputSystem(tool_mode, profile);
+  };
+#endif
+}
+
+void Fm4App::OnShutdown() {
+  StopQuietCapture();
+#ifdef _WIN32
+    fm4::wheel::ShutdownFeedback();
+#endif
+}
+
+bool Fm4App::OnWindowCloseRequested() {
+  StopQuietCapture();
+  #ifdef _WIN32
+    fm4::wheel::ShutdownFeedback();
+  #endif
+  return true;
+}
+
+void Fm4App::OnPostLaunchModule(rex::system::XThread*) {
+  auto* graphics=runtime()?runtime()->graphics_system():nullptr;
+  quiet_capture_=fm4::quiet::Capture(graphics?graphics->presenter():nullptr);
+}
+void Fm4App::StopQuietCapture() {
+  if(quiet_capture_) { quiet_capture_->request_stop(); quiet_capture_.reset(); }
+}
+
 void Fm4App::OnPostSetup() {
+#ifdef FM4_ENABLE_FORZA_PLUS_NATIVE
+  // Prepared native content is receipt-owned; the stock auto-importer must
+  // not mutate it after pre-entry validation.
+  if (fm4_plus_proposal::Session().enabled()) return;
+#endif
   if (!REXCVAR_GET(fm4_auto_install_disc2_content) || !runtime() ||
       !runtime()->kernel_state() ||
       !runtime()->kernel_state()->content_manager()) {

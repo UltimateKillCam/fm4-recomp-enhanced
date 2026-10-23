@@ -1,0 +1,28 @@
+{
+  "profile": "Native",
+  "internal_scale": 0,
+  "upscaler": "Bilinear",
+  "neural_rendering": false,
+  "neural_passes": 1,
+  "neural_preset": 0,
+  "neural_style": 0,
+  "neural_strength": 1.0,
+  "neural_runtime_folder": ".local/neural-runtime",
+  "neural_path": "auto",
+  "gpu_adapter_name": "",
+  "texture_pack": "textures/Enhanced",
+  "texture_mode": "auto",
+  "enable_rgba_textures": false,
+  "readback_batch": true,
+  "host_render_targets": false,
+  "readback_heap": false,
+  "readback_center_sample": false,
+  "runtime_overrides": {
+    "query_occlusion_fake_sample_count": 1000000,
+    "anisotropic_override": 5,
+    "texture_cache_memory_limit_soft": 1536,
+    "texture_cache_memory_limit_hard": 3072,
+    "present_fsr_sharpness_reduction": 0.5,
+    "present_dither": true
+  }
+}

@@ -1,5 +1,43 @@
 # FM4 build notes
 
+Modified 2026-10-23.
+
+## Build and launch
+
+Run commands from the repository root. Replace `D:\Games\FM4-extracted`
+with your extracted game folder. Windows launchers find PowerShell 7 or fall
+back to Windows PowerShell 5.1; no PATH change is needed for launch or settings.
+
+Build the enhanced SDK first, then generate and build the game in a fresh workspace:
+
+```powershell
+.\tools\Build-Enhanced-Sdk.cmd
+.\tools\Run-PowerShell.cmd -File .\tools\Build-Enhanced-Game.ps1 -GameDataRoot "D:\Games\FM4-extracted" -Jobs 2
+.\tools\Run-PowerShell.cmd -File .\tools\Run-Enhanced.ps1 -GameDataRoot "D:\Games\FM4-extracted" -WorkspaceName clean-enhanced-game
+```
+
+`Build-Enhanced-Sdk.cmd` prepares the pinned SDK and resolve shaders, then builds
+and installs the enhanced runtime under `.local/sdk-enhanced-install`.
+`Build-Enhanced-Game.ps1` uses `.local/clean-enhanced-game` by default; choose
+a new `-WorkspaceName` for another clean build. Pass that name to
+`Run-Enhanced.ps1` when launching that build.
+
+Add `-ValidateOnly` to the build command to check its prerequisites without
+compilation (the enhanced SDK must already be prepared and built).
+Local dependencies, generated translation and build outputs stay under `.local`.
+Profiles, saves and caches use `.local/user`.
+
+For folder shortcuts, place your extracted Disc 1 data under `.local/game-disc1`.
+The shortcuts expect `.local/work/fm4/out/build/win-amd64-release`. For the fresh
+enhanced build, use **Save** in the settings window, then launch with the command
+above and `-WorkspaceName clean-enhanced-game`; shortcuts do not select that
+workspace automatically.
+
+To install Disc 2 content, extract the four content packages into a folder and
+pass it as `-Disc2Root` to `Run-Enhanced.ps1`.
+Folder shortcuts use `.local/disc2-content`. Installed packages are kept in
+user data and do not require the source folder on later starts.
+
 ## Pinned Windows toolchain
 
 Build the SDK and FM4 with the same C++ ABI. The validated packaging build uses
@@ -16,7 +54,7 @@ a symbolic-link mirror that may be checked out as one-line text files on
 Windows. These fixes are recorded in SDK commit
 [`f16992c`](https://github.com/Alexbeav/rexglue-sdk/commit/f16992c92e610c2d71773994436b442d9946f4e1).
 
-The builder-first release path installs the SDK under `.local\sdk-install` and
+The baseline Build-Local path installs the SDK under `.local\sdk-install` and
 builds FM4 under:
 
 ```text
@@ -26,9 +64,6 @@ builds FM4 under:
 It asks the SDK CLI to generate its standard CMake bootstrap locally, copies
 only allowlisted project source into `.local\work`, and generates all
 game-derived translation there.
-The 2026-09-03 end-to-end test completed the 293-target FM4 build and a bounded
-15-second startup smoke test. The original known-good executable retained SHA-256
-`4339E81F9CE190099F8756616CEC2C8AA6BB105E33B38E577A103196D2311281`.
 
 ## Generated function registrar
 

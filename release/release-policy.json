@@ -35,11 +35,14 @@
     "out",
     "sdk",
     "seed-user-data",
-    "user"
+    "user",
+    "textures",
+    "texture-pack",
+    "texture-dumps"
   ],
   "forbidden_extensions": [
     ".7z", ".bak", ".bin", ".dll", ".dmp", ".exe", ".iso",
     ".lib", ".obj", ".pak", ".pdb", ".rar", ".stfs", ".xdc",
-    ".xex", ".xtr", ".zip"
+    ".xex", ".xtr", ".zip", ".dds", ".xds", ".ktx", ".ktx2"
   ]
 }

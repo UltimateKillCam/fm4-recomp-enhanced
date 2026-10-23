@@ -1,14 +1,16 @@
+# Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$GameDataRoot,
     [ValidateRange(1, 64)][int]$Jobs = 2,
     [string]$SdkSourceRoot,
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')][string]$WorkspaceName,
     [switch]$ValidateOnly
 )
 
 . (Join-Path $PSScriptRoot "Release.Common.ps1")
 
-if (-not $IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
     throw "The validated local builder currently supports Windows AMD64 only."
 }
 
@@ -32,6 +34,9 @@ if ($ValidateOnly) {
 }
 
 $localRoot = Join-Path $root ".local"
+if ($WorkspaceName) {
+    $localRoot = Join-Path $localRoot $WorkspaceName
+}
 $sdkSource = if ($SdkSourceRoot) { [IO.Path]::GetFullPath($SdkSourceRoot) } else { Join-Path $localRoot "rexglue-sdk" }
 [IO.Directory]::CreateDirectory($localRoot) | Out-Null
 
@@ -72,6 +77,7 @@ Invoke-CheckedNative -FilePath $cmake -ArgumentList @(
     "-DCMAKE_C_FLAGS=-march=x86-64-v3",
     "-DCMAKE_CXX_FLAGS=-march=x86-64-v3",
     "-DCMAKE_CXX_STANDARD=23",
+    "-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=$(Join-Path $root 'tools/sdk/Extend-Sdk.cmake')",
     "-DCMAKE_CONFIGURATION_TYPES=Release",
     "-DCMAKE_INSTALL_PREFIX=$sdkInstall"
 ) -WorkingDirectory $sdkSource
@@ -125,12 +131,16 @@ $manifestTemplate = Join-Path $fm4Root "fm4_manifest.toml"
 $localManifest = Join-Path $fm4Root "fm4_manifest.local.toml"
 $tomlGameRoot = $resolvedGameRoot.Replace("\", "/").Replace('"', '\"')
 $manifest = (Get-Content -LiteralPath $manifestTemplate -Raw).Replace("../extracted", $tomlGameRoot)
-Set-Content -LiteralPath $localManifest -Value $manifest -Encoding utf8NoBOM
+Write-Fm4Utf8File -Path $localManifest -Text $manifest
 
 Invoke-CheckedNative -FilePath $rexglue -ArgumentList @("codegen", $localManifest) -WorkingDirectory $fm4Root
 Invoke-CheckedNative -FilePath $cmake -ArgumentList @(
     "--preset", "win-amd64-release",
     "-DCMAKE_PREFIX_PATH=$sdkInstall",
+    "-Drexglue_DIR=$(Join-Path $sdkInstall 'lib/cmake/rexglue')",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
+    "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
     "-DCMAKE_C_COMPILER=$clang",
     "-DCMAKE_CXX_COMPILER=$clangxx"
 ) -WorkingDirectory $fm4Root
@@ -142,6 +152,7 @@ $buildRoot = Join-Path $fm4Root "out/build/win-amd64-release"
 Copy-Item -LiteralPath (Join-Path $fm4Root "fm4_runtime.toml") -Destination (Join-Path $buildRoot "fm4.toml") -Force
 $artifacts = @(
     "fm4.exe",
+    "fm4-input.exe",
     "fm4_SpeechFacade_default.dll",
     "fm4_XMediaFacade_default.dll",
     "rexgpu-xenos.dll",
@@ -164,10 +175,11 @@ $receipt = [ordered]@{
     project_worktree_dirty = $projectDirty
     sdk_repository = $policy.sdk.repository
     sdk_commit = $sdkHead
+    sdk_extensions = Get-Fm4FileRecords -Paths @(Get-ChildItem -LiteralPath (Join-Path $root 'tools/sdk') -File | ForEach-Object FullName) -BasePath $root
     game_inputs = @($policy.required_game_inputs)
     artifacts = Get-Fm4FileRecords -Paths $artifacts -BasePath $buildRoot
 }
-$receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $buildRoot "build-provenance.json") -Encoding utf8NoBOM
+$receipt | ConvertTo-Json -Depth 8 | Write-Fm4Utf8File -Path (Join-Path $buildRoot "build-provenance.json")
 
 Write-Host "Local build complete: $buildRoot"
-Write-Host "Run it with: pwsh -File .\tools\Run-Local.ps1 -GameDataRoot `"$resolvedGameRoot`""
+Write-Host "Run it with: .\tools\Run-PowerShell.cmd -NoProfile -File .\tools\Run-Local.ps1 -GameDataRoot `"$resolvedGameRoot`"$(if ($WorkspaceName) { ' -WorkspaceName ' + $WorkspaceName })"

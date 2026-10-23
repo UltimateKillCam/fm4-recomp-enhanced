@@ -1,5 +1,7 @@
+# Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'Launcher.Common.ps1')
 
 function Get-Fm4RepositoryRoot {
     return [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -34,6 +36,10 @@ function Resolve-Fm4Tool {
     param([Parameter(Mandatory)][string]$Name)
 
     if ($Name -in @("clang", "clang++")) {
+        $localCompiler = Join-Path (Get-Fm4RepositoryRoot) ".local/tools/llvm/bin/$Name.exe"
+        if (Test-Path -LiteralPath $localCompiler -PathType Leaf) {
+            return $localCompiler
+        }
         $candidate = Join-Path $env:ProgramFiles "LLVM/bin/$Name.exe"
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {
             return $candidate
@@ -84,9 +90,24 @@ function Get-Fm4FileRecords {
     return @($Paths | Sort-Object | ForEach-Object {
         $item = Get-Item -LiteralPath $_
         [ordered]@{
-            path = if ($BasePath) { [IO.Path]::GetRelativePath($BasePath, $item.FullName).Replace("\", "/") } else { $item.FullName }
+            path = if ($BasePath) { (Get-Fm4RelativePath -BasePath $BasePath -Path $item.FullName).Replace("\", "/") } else { $item.FullName }
             size = $item.Length
             sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
         }
     })
+}
+
+function Get-Fm4RelativePath {
+    param([Parameter(Mandatory)][string]$BasePath, [Parameter(Mandatory)][string]$Path)
+    $base = [IO.Path]::GetFullPath($BasePath).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $target = [IO.Path]::GetFullPath($Path)
+    if ($target.Equals($base, [StringComparison]::OrdinalIgnoreCase)) { return '.' }
+    $prefix = $base + [IO.Path]::DirectorySeparatorChar
+    if ($target.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $target.Substring($prefix.Length) }
+    if (-not ([IO.Path]::GetPathRoot($prefix)).Equals([IO.Path]::GetPathRoot($target), [StringComparison]::OrdinalIgnoreCase)) { return $target }
+    # Windows PowerShell 5.1's .NET Framework has no Path.GetRelativePath.
+    $baseUri = [Uri]::new($prefix)
+    $targetUri = [Uri]::new($target)
+    if ($baseUri.Scheme -ne $targetUri.Scheme) { return $target }
+    return [Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace('/', [IO.Path]::DirectorySeparatorChar)
 }

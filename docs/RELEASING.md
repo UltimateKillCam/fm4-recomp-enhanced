@@ -1,149 +1,42 @@
-# Release process
+# Source release process
 
-The primary public download is a ready-to-run `fm4-recomp-<version>-win-x64.zip`
-with its SHA-256 checksum. Optional source archives remain available for rebuilding.
-The source repository stays free of compiled binaries and game data.
+Modified 2026-10-23.
 
-## Player package
+Public artifacts contain reviewed source and checksums. Publication requires the
+project owner’s approval of the exact contents and workflow.
 
-Build the release's exact title sources against the pinned public SDK. Package only
-`fm4.exe`, both generated facade DLLs, `rexruntime.dll`, `rexgpu-xenos.dll`,
-`TracyClient.dll`, app-local Visual C++ redistributable DLLs, configuration,
-launcher, player instructions, manifest and license notices.
-Do not copy a complete development build directory.
-Game files, original XEX files, DLC, Xbox system files, profiles, shader caches,
-logs, PDBs and raw generated C++ must not enter this ZIP.
+## Contents
 
-```powershell
-& .\tools\New-BinaryRelease.ps1 -BuildRoot 'D:\Builds\FM4' -SdkSourceRoot 'D:\Sources\rexglue-sdk' -OutputDirectory 'D:\Releases' -Version '0.1.0-alpha.2'
-```
+The source allowlist is [release/source-files.txt](../release/source-files.txt).
+[release/release-policy.json](../release/release-policy.json) records policy,
+pinned SDK identity and required game inputs.
 
-The destination package directory must be new. The packager copies named outputs,
-adds the compiler installation's app-local CRT and dependency notices, writes a
-file manifest, then creates the ZIP and checksum. Before uploading, inspect ZIP
-entries, verify every PE file is AMD64 and its imports resolve, test the extracted
-launcher and confirm the three required game-input identities. Record fresh build
-and startup evidence separately from historical gameplay qualification.
-Use the full-readback native-1x defaults and document the current performance limits.
-The release body must link the player ZIP first and label the source kit as optional.
-See [player instructions](PLAYING.md).
+Exclude game files, disc images, content packages, Xbox system files, textures,
+generated game translation, executables, DLLs, SDK binaries, object files,
+debug symbols, saves, caches, captures and local build/dependency directories.
+Retain the project license and all third-party notices.
 
-## GitHub automation
+## Package and review
 
-`Source CI` runs on pull requests, pushes to `main` and `release/**`, and manual requests.
-It runs on a GitHub-hosted Windows 2025 runner with read-only repository access.
-Actions are pinned to exact commits. Dependabot checks those pins monthly.
-
-The workflow parses all PowerShell scripts and runs the repository boundary check.
-It creates the source archive twice and compares SHA-256 hashes.
-It inspects archive entries, the checksum, source provenance, and every payload hash.
-It also tests that the boundary rejects executable bytes under an allowed source filename.
-The workflow retains the archive and checksum as `source-release` for 14 days.
-
-These checks need no game files or private credentials.
-They do not build the SDK, generate game translation, or test gameplay.
-A green source check does not replace the local review gate below.
-
-To prepare a release:
-
-1. Merge the reviewed changes into `main` after `Source CI` passes.
-2. Open Actions and select `Prepare release`.
-3. Run the workflow on `main` with a version without `v`, such as `0.1.0-alpha.2`.
-4. Review the resulting draft, attached archive, checksum, and workflow run.
-5. Complete the local review gate below before you approve publication.
-
-The release workflow reuses the same source checks on the selected commit.
-Only its draft job receives repository write access.
-It attaches the tested archive and checksum without rebuilding them.
-It creates an unpublished prerelease draft and never publishes it automatically.
-The draft targets the exact workflow commit. Existing releases are not overwritten.
-Version tags are finalized when the approved draft is published.
-A failed check prevents draft creation.
-The workflow rejects a version whose Git tag already exists.
-Local source checks use temporary packaging directories and replace only the matching candidate ZIP and checksum after success.
-
-## Source artifact boundary
-
-The source archive is built from the exact paths in
-[`release/source-files.txt`](../release/source-files.txt). The policy and
-validated input identities are machine-readable in
-[`release/release-policy.json`](../release/release-policy.json).
-
-The archive must not contain:
-
-- game files, disc images, XEX files, downloadable content, or Xbox system
-  files;
-- generated C++ translation under `fm4/generated`;
-- FM4 executables, facade DLLs, SDK binaries, object files, or debug symbols;
-- saves, user data, shader caches, logs, dumps, or captures; or
-- local build and dependency directories.
-
-`tools/Test-RepositoryBoundary.ps1` rejects tracked files outside the source
-allowlist and rejects forbidden paths, extensions, sizes, and executable or
-Xbox package magic. Ignored files are never package inputs.
-
-## Create a review candidate
-
-Use a clean reviewed commit for a final candidate:
+From a clean reviewed checkout:
 
 ```powershell
-pwsh -File .\tools\Test-RepositoryBoundary.ps1
-pwsh -File .\tools\New-SourceRelease.ps1 -Version 0.1.0-alpha.1
+.\tools\Run-PowerShell.cmd -File .\tools\Test-RepositoryBoundary.ps1
+.\tools\Run-PowerShell.cmd -File .\tools\New-SourceRelease.ps1 -Version 0.1.0-alpha.1
 ```
 
-For an internal preview of uncommitted work, add `-AllowDirty`. The embedded
-`SOURCE-PROVENANCE.json` then records that the worktree was dirty. A dirty
-candidate is not publishable.
+The packager writes a source ZIP, a SHA-256 checksum and an embedded
+`SOURCE-PROVENANCE.json`. Inspect archive entries against the allowlist and
+confirm the source and SDK commits and a clean worktree. Repeat packaging in
+separate output directories with the same PowerShell runtime and compare hashes;
+compression can differ between PowerShell 5.1 and 7. A dirty candidate is not
+publishable.
 
-The packager writes a ZIP with sorted entries, no compression, and a fixed
-entry timestamp. It also writes `<archive>.sha256`. Identical source bytes,
-version, repository URL, and commit identity produce identical archives.
+Before release, validate game inputs, complete a clean local build and check
+startup, saves, race completion, content installation and the edition’s input
+features. Report unresolved limitations from [STATUS.md](STATUS.md). Submit the
+archive entry list, checksums and release text for owner approval.
 
-## Source review gate
-
-Before publication:
-
-1. Run the boundary check from a clean checkout of the candidate commit.
-2. Create the archive twice in separate output directories and compare its
-   SHA-256 hashes.
-3. Inspect every archive entry and `SOURCE-PROVENANCE.json` against the source
-   allowlist.
-4. Confirm `project_worktree_dirty` is `false`, and confirm the recorded FM4
-   and SDK commits.
-5. Test `tools/Build-Local.ps1 -ValidateOnly` with the validated game dump.
-6. Complete a clean local build, startup smoke test, and the gameplay checks
-   in [`STATUS.md`](STATUS.md).
-7. Present the archive entry list, hashes, test evidence, and proposed release
-   text to the project owner. Publication requires explicit approval.
-
-## User-side build
-
-The source archive does not contain an ISO extractor. The user extracts a
-legally obtained copy of the game, then runs:
-
-```powershell
-pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted"
-pwsh -File .\tools\Run-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted"
-```
-
-The builder verifies the three required Xbox executable inputs by size and
-SHA-256, clones the configured ReXGlue SDK commit with its submodules, builds
-the SDK, copies the allowlisted source into `.local/work`, generates
-translation there, and builds FM4 there. It writes `build-provenance.json`
-beside the local executable. No game input or generated translation is
-uploaded by these scripts, and the repository's retained development build is
-not modified.
-
-The run script passes `.local/user` explicitly as the user-data root. Release
-testing therefore does not use or modify an existing profile in the user's
-Documents folder.
-
-The builder also asks the pinned ReXGlue CLI to generate its standard CMake
-bootstrap file in a temporary local directory. This avoids treating an ignored
-SDK-generated file from a developer checkout as release source.
-
-The build requires Windows AMD64, Git, CMake 3.25 or newer, Ninja, and Clang.
-LLVM 22 with the MSVC target is the validated compiler. The builder rejects a
-MinGW/libc++ Clang target because its C++ ABI is incompatible with the
-validated SDK and FM4 build. Downloads are limited to the pinned Git
-repositories required to build the SDK.
+Users build locally as described in [Build notes](../BUILD-NOTES.md). The build
+scripts download pinned SDK sources and generate translation on the user’s
+machine; game inputs and generated translation are not uploaded.

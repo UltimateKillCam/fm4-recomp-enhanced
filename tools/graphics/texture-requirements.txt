@@ -1,0 +1,6 @@
+spandrel==0.4.2
+pillow==12.3.0
+numpy==2.5.2
+safetensors==0.8.0
+einops==0.8.2
+xxhash==4.0.1

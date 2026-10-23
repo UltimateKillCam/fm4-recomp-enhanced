@@ -1,3 +1,4 @@
+# Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 # Scoped startup-media patches.
 #
 # The Turn 10 descriptor uses skip mode 2. Dolby uses skip mode 1 and is
@@ -17,4 +18,10 @@ registers = ["r29"]
 [[midasm_hook]]
 name = "EnableClarksonVoiceoverSkip"
 address = 0x825195DC
+registers = ["r3"]
+
+# Original wheel effect update; byte +5 gates the game's feedback output.
+[[midasm_hook]]
+name = "Fm4WheelActive"
+address = 0x823A3F78
 registers = ["r3"]

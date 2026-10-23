@@ -1,0 +1,70 @@
+{
+  "repository": "https://github.com/xenia-canary/xenia-canary",
+  "revision": "583528e8e3d763a86a37aa848a7f4019e579362a",
+  "files": [
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_8bpp_scaled.cs.xesl",
+      "sha256": "a1bdd159c569edd9d5718b3aaed34c97fdf5e4b9b533a8863fa080bd70166e25"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_16bpp_scaled.cs.xesl",
+      "sha256": "cbd2090b68f6760a02305f10ffe1cb36cc64cbb7a0c8310975f55a374660aed7"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_32bpp_scaled.cs.xesl",
+      "sha256": "3404e0d812eaa14946dd390cb2405e253ee9b86d92d6c79fb7bf4e82b6a1ba49"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_64bpp_scaled.cs.xesl",
+      "sha256": "056e9c5f0bd5ff76773dedebc8ce4ecc85ccc4ff4aa92ca4c7308aeeb1a1ff8b"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_128bpp_scaled.cs.xesl",
+      "sha256": "22b5884f3a28bc62261f2d73b0e8d6632d21e8cee1a21517ddb459b1a2664aca"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_8bpp.xesli",
+      "sha256": "5209a2effd8a9b82c272b4267a05739c3003a12f2764363e87b7ea2b5df0168f"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_16bpp.xesli",
+      "sha256": "b543aba81cd36060cc965f508553178540dddf997d3a459e27e22362d8d18c27"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_32bpp.xesli",
+      "sha256": "98c47d9d4cfbea2411b9821b1efa6fe83535332de9bc02fe0bd426b8c38cee92"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_64bpp.xesli",
+      "sha256": "2d9a62132748a99afeffd6369db0c65fc042bd7678c7be7642b7e8e5d732474c"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve_full_128bpp.xesli",
+      "sha256": "10f3d1ffff4ceb8a9014a536a01a80c2028efdbeff6a32161a768cc61980ccd9"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/endian.xesli",
+      "sha256": "a2bae617ba27371d6b881808ab1fc29621ef043c83bde0ded8b70e2642743108"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/pixel_formats.xesli",
+      "sha256": "a5d9b03d534c3cdd072c9691a78dd94329716cd0cbd347f1507d4f48f7f66c16"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/resolve.xesli",
+      "sha256": "9d2fa4bebf2d16cbf32b981ff498f86d1863d3165b73be821417a8d8ccbb8b92"
+    },
+    {
+      "path": "src/xenia/ui/shaders/xesl.xesli",
+      "sha256": "f7847e2cf76076e5f71ed5777aa9f33f1fe5b040448e19abe314619423b9c935"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/edram.xesli",
+      "sha256": "297927ba8d0fe53f608a29dfb33dce5e6988735f78adeb31210d97e7739fafeb"
+    },
+    {
+      "path": "src/xenia/gpu/shaders/texture_address.xesli",
+      "sha256": "f72d04cb599cf9f607dff66b7e677b7cd8ac261ad2e29fb8556821c57fea4fd1"
+    }
+  ]
+}
