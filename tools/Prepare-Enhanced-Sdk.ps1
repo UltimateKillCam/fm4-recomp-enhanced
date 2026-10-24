@@ -26,5 +26,6 @@ Copy-Item -LiteralPath (Join-Path $root 'tools/graphics/resolve_capture.h') -Des
 Copy-Item -LiteralPath (Join-Path $root 'tools/graphics/scene_depth.h') -Destination (Join-Path $target 'include/rex/graphics/d3d12/fm4_scene_depth.h') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/graphics/frame_metrics.h') -Destination (Join-Path $target 'include/rex/graphics/d3d12/fm4_frame_metrics.h') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/graphics/register_update.h') -Destination (Join-Path $target 'include/rex/graphics/d3d12/fm4_register_update.h') -Force
+Copy-Item -LiteralPath (Join-Path $root 'tools/graphics/frame_trace.h') -Destination (Join-Path $target 'include/rex/graphics/d3d12/fm4_frame_trace.h') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/sdk/temporal_bridge.h') -Destination (Join-Path $target 'include/rex/graphics/d3d12/fm4_temporal_bridge.h') -Force
 Write-Host 'Enhanced SDK source is ready in its isolated folder.'

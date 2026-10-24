@@ -40,10 +40,17 @@ index 12efe6d..0705010 100644
    uint32_t ReadRegisterValue(uint32_t index) const;
    virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base, uint32_t num_registers);
 diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
-index 7384494..96924e0 100644
+index 7384494..427c567 100644
 --- a/include/rex/graphics/d3d12/command_processor.h
 +++ b/include/rex/graphics/d3d12/command_processor.h
-@@ -50,6 +50,8 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -46,10 +46,15 @@ namespace rex::graphics::d3d12 {
+ 
+ class D3D12CommandProcessor : public CommandProcessor {
+  public:
++  // Cross-scale draws must not mix sample counts inside one host query.
++  bool HasActiveOcclusionQuery() const { return active_occlusion_query_.valid; }
++
+   explicit D3D12CommandProcessor(D3D12GraphicsSystem* graphics_system,
                                   system::KernelState* kernel_state);
    ~D3D12CommandProcessor();
  
@@ -52,7 +59,7 @@ index 7384494..96924e0 100644
    void ClearCaches() override;
    void InvalidateGpuMemory() override;
  
-@@ -205,6 +207,7 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -205,6 +210,7 @@ class D3D12CommandProcessor : public CommandProcessor {
    bool SetupContext() override;
    void ShutdownContext() override;
  
@@ -60,7 +67,7 @@ index 7384494..96924e0 100644
    void WriteRegister(uint32_t index, uint32_t value) override;
    void WriteRegistersFromMem(uint32_t start_index, uint32_t* base, uint32_t num_registers) override;
    bool ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader, uint32_t packet,
-@@ -217,6 +220,7 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -217,6 +223,7 @@ class D3D12CommandProcessor : public CommandProcessor {
                   uint32_t frontbuffer_height) override;
  
    void OnPrimaryBufferEnd() override;
@@ -68,7 +75,7 @@ index 7384494..96924e0 100644
  
    Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
                       const uint32_t* host_address, uint32_t dword_count) override;
-@@ -362,6 +366,9 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -362,6 +369,9 @@ class D3D12CommandProcessor : public CommandProcessor {
                                              D3D12_CPU_DESCRIPTOR_HANDLE& cpu_handle_out,
                                              D3D12_GPU_DESCRIPTOR_HANDLE& gpu_handle_out);
  
@@ -78,7 +85,7 @@ index 7384494..96924e0 100644
    void UpdateFixedFunctionState(const draw_util::ViewportInfo& viewport_info,
                                  const draw_util::Scissor& scissor, bool primitive_polygonal,
                                  reg::RB_DEPTHCONTROL normalized_depth_control);
-@@ -374,6 +381,7 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -374,6 +384,7 @@ class D3D12CommandProcessor : public CommandProcessor {
    bool UpdateBindings(const D3D12Shader* vertex_shader, const D3D12Shader* pixel_shader,
                        ID3D12RootSignature* root_signature, bool shared_memory_is_uav);
    bool IssueCopy_ReadbackResolvePath();
@@ -86,7 +93,7 @@ index 7384494..96924e0 100644
    bool IssueDraw_MemexportReadbackFullPath(uint32_t total_size);
    bool IssueDraw_MemexportReadbackFastPath(uint32_t total_size);
  
-@@ -473,11 +481,68 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -473,11 +484,68 @@ class D3D12CommandProcessor : public CommandProcessor {
    CommandAllocator* command_allocator_submitted_first_ = nullptr;
    CommandAllocator* command_allocator_submitted_last_ = nullptr;
    ID3D12GraphicsCommandList* command_list_ = nullptr;
@@ -155,7 +162,7 @@ index 7384494..96924e0 100644
    // Viewport info caching - avoids redundant GetHostViewportInfo recalculation
    // when viewport-affecting register state hasn't changed between draws.
    struct ViewportCacheKey {
-@@ -488,6 +553,8 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -488,6 +556,8 @@ class D3D12CommandProcessor : public CommandProcessor {
      uint32_t pa_sc_window_offset;
      uint32_t normalized_depth_control;
      uint32_t vport_regs[6];  // XSCALE, XOFFSET, YSCALE, YOFFSET, ZSCALE, ZOFFSET
@@ -164,7 +171,7 @@ index 7384494..96924e0 100644
      uint32_t flags;          // packed: convert_z_to_float24, full_float24, ps_writes_depth
      bool operator==(const ViewportCacheKey&) const = default;
    };
-@@ -618,9 +685,10 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -618,9 +688,10 @@ class D3D12CommandProcessor : public CommandProcessor {
      uint32_t scale_x;
      uint32_t scale_y;
      uint32_t pixel_size_log2;
@@ -176,7 +183,7 @@ index 7384494..96924e0 100644
    enum class ResolveDownscaleRootParameter : UINT {
      kConstants,
      kSource,
-@@ -632,6 +700,7 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -632,6 +703,7 @@ class D3D12CommandProcessor : public CommandProcessor {
    Microsoft::WRL::ComPtr<ID3D12PipelineState> resolve_downscale_pipeline_;
    Microsoft::WRL::ComPtr<ID3D12Resource> resolve_downscale_buffer_;
    uint32_t resolve_downscale_buffer_size_ = 0;
@@ -287,6 +294,89 @@ index 7a9d6a2..1e6e5d2 100644
    bool storage_write_flush_shaders_ = false;
    bool storage_write_flush_pipelines_ = false;
    bool storage_write_thread_shutdown_ = false;
+diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
+index b9d2688..fb6d94a 100644
+--- a/include/rex/graphics/d3d12/render_target_cache.h
++++ b/include/rex/graphics/d3d12/render_target_cache.h
+@@ -69,6 +69,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+ 
+   bool msaa_2x_supported() const { return msaa_2x_supported_; }
+ 
++  bool IsHostRenderTargetSampleGrid() const override {
++    return host_render_target_sample_grid_;
++  }
++
++  bool IsHostRenderTargetMsaaCollapsed() const override {
++    return host_render_target_msaa_collapsed_;
++  }
++
+   void WriteEdramRawSRVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+   void WriteEdramRawUAVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+   void WriteEdramUintPow2SRVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle,
+@@ -114,6 +122,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   static DXGI_FORMAT GetDepthSRVStencilDXGIFormat(xenos::DepthRenderTargetFormat format);
+ 
+  protected:
++  bool SupportsUnscaledDepthOnly() const override;
+   uint32_t GetMaxRenderTargetWidth() const override { return D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION; }
+   uint32_t GetMaxRenderTargetHeight() const override {
+     return D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+@@ -199,6 +208,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   ID3D12PipelineState* resolve_copy_pipelines_[size_t(draw_util::ResolveCopyShaderIndex::kCount)] =
+       {};
+ 
++  ID3D12PipelineState*
++      resolve_copy_unscaled_pipelines_[size_t(draw_util::ResolveCopyShaderIndex::kCount)] = {};
++
+   // For traces.
+   ID3D12Resource* edram_snapshot_download_buffer_ = nullptr;
+   std::unique_ptr<ui::d3d12::D3D12UploadBufferPool> edram_snapshot_restore_pool_;
+@@ -392,11 +404,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+       // this is done only for the color source).
+       uint32_t host_depth_source_is_copy : 1;
+ 
+-      // Last bits because this affects the root signature - after sorting, only
+-      // change it as fewer times as possible. Depth buffers have an additional
+-      // stencil SRV.
++      // The mode selects the root signature. Scale variants also form
++      // separate groups when sorting transfer invocations.
+       static_assert(size_t(TransferMode::kCount) <= (size_t(1) << 3));
+       TransferMode mode : 3;
++      // Scale variants also distinguish the generated addressing code.
++      uint32_t dest_unscaled : 1;
++      uint32_t source_unscaled : 1;
++      uint32_t host_depth_source_unscaled : 1;
+     };
+ 
+     TransferShaderKey() : key(0) { static_assert_size(*this, sizeof(key)); }
+@@ -481,6 +496,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+     struct {
+       xenos::MsaaSamples msaa_samples : 2;
+       uint32_t resource_format : 4;
++      uint32_t source_unscaled : 1;
++      uint32_t dest_unscaled : 1;
+       // Last bit because this affects the root signature - after sorting, only
+       // change it at most once. Depth buffers have an additional stencil SRV.
+       uint32_t is_depth : 1;
+@@ -666,7 +683,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   // Writes contents of host render targets within rectangles from
+   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
+   bool DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
+-                         uint32_t dump_pitch);
++                         uint32_t dump_pitch, bool unscaled = false);
+ 
+   bool use_stencil_reference_output_ = false;
+ 
+@@ -676,6 +693,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   bool depth_float24_convert_in_pixel_shader_ = false;
+ 
+   bool msaa_2x_supported_ = false;
++  // Latched at initialization; changing resource layout requires a restart.
++  bool host_render_target_sample_grid_ = false;
++  bool host_render_target_msaa_collapsed_ = false;
+ 
+   std::shared_ptr<ui::d3d12::D3D12CpuDescriptorPool> descriptor_pool_color_;
+   std::shared_ptr<ui::d3d12::D3D12CpuDescriptorPool> descriptor_pool_depth_;
 diff --git a/include/rex/graphics/d3d12/shared_memory.h b/include/rex/graphics/d3d12/shared_memory.h
 index 0d344e3..7ce02e7 100644
 --- a/include/rex/graphics/d3d12/shared_memory.h
@@ -302,7 +392,7 @@ index 0d344e3..7ce02e7 100644
   private:
    D3D12CommandProcessor& command_processor_;
 diff --git a/include/rex/graphics/d3d12/texture_cache.h b/include/rex/graphics/d3d12/texture_cache.h
-index 4d845c7..60becae 100644
+index 4d845c7..7ed386a 100644
 --- a/include/rex/graphics/d3d12/texture_cache.h
 +++ b/include/rex/graphics/d3d12/texture_cache.h
 @@ -10,11 +10,14 @@
@@ -320,7 +410,15 @@ index 4d845c7..60becae 100644
  #include <utility>
  #include <vector>
  
-@@ -40,6 +43,7 @@ class D3D12TextureCache final : public TextureCache {
+@@ -24,6 +27,7 @@
+ #include <rex/graphics/pipeline/texture/cache.h>
+ #include <rex/graphics/pipeline/texture/util.h>
+ #include <rex/graphics/register_file.h>
++#include <rex/graphics/util/draw.h>
+ #include <rex/graphics/xenos.h>
+ #include <rex/ui/d3d12/d3d12_api.h>
+ #include <rex/ui/d3d12/d3d12_provider.h>
+@@ -40,6 +44,7 @@ class D3D12TextureCache final : public TextureCache {
      TextureKey key;
      uint32_t host_swizzle;
      uint8_t swizzled_signs;
@@ -328,7 +426,7 @@ index 4d845c7..60becae 100644
    };
  
    // Sampler parameters that can be directly converted to a host sampler or used
-@@ -58,6 +62,10 @@ class D3D12TextureCache final : public TextureCache {
+@@ -58,6 +63,10 @@ class D3D12TextureCache final : public TextureCache {
        xenos::AnisoFilter aniso_filter : 3;  // 17
        uint32_t mip_min_level : 4;           // 21
        uint32_t mip_base_map : 1;            // 22
@@ -339,7 +437,32 @@ index 4d845c7..60becae 100644
        // Maximum mip level is in the texture resource itself, but mip_base_map
        // can be used to limit fetching to mip_min_level.
      };
-@@ -231,6 +239,7 @@ class D3D12TextureCache final : public TextureCache {
+@@ -119,6 +128,11 @@ class D3D12TextureCache final : public TextureCache {
+   // Returns whether the actual scale is not smaller than the requested one.
+   static bool ClampDrawResolutionScaleToMaxSupported(uint32_t& scale_x, uint32_t& scale_y,
+                                                      const ui::d3d12::D3D12Provider& provider);
++  // Before a partial scaled overwrite, seed native pages in scaled memory so
++  // changing the page flags cannot lose pixels outside the resolve rectangle.
++  bool PrepareScaledResolveNativePages(uint32_t start, uint32_t length,
++                                        uint32_t pixel_size_log2);
++
+   // Ensures the tiles backing the range in the buffers are allocated.
+   bool EnsureScaledResolveMemoryCommitted(uint32_t start_unscaled, uint32_t length_unscaled,
+                                           uint32_t length_scaled_alignment_log2 = 0) override;
+@@ -162,6 +176,12 @@ class D3D12TextureCache final : public TextureCache {
+                                      uint32_t* width_unscaled_out = nullptr,
+                                      uint32_t* height_unscaled_out = nullptr);
+ 
++  // On success, marks the guest range as resolved and fills ordinary watched
++  // cache textures from a single-sampled host color target in COPY_SOURCE state.
++  // On failure, the caller must still call MarkRangeAsResolved.
++  bool CacheHostResolve(const draw_util::ResolveInfo& resolve_info, ID3D12Resource* source,
++                        const D3D12_BOX& source_box);
++
+  protected:
+   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;
+   bool IsScaledResolveSupportedForFormat(TextureKey key) const override;
+@@ -231,6 +251,7 @@ class D3D12TextureCache final : public TextureCache {
          uint32_t is_signed : 1;
          uint32_t host_swizzle : 12;
          uint32_t dimension : 2;
@@ -347,7 +470,7 @@ index 4d845c7..60becae 100644
        };
  
        SRVDescriptorKey() : key(0) { static_assert_size(*this, sizeof(key)); }
-@@ -253,6 +262,17 @@ class D3D12TextureCache final : public TextureCache {
+@@ -253,6 +274,17 @@ class D3D12TextureCache final : public TextureCache {
  
      ID3D12Resource* resource() const { return resource_.Get(); }
  
@@ -365,7 +488,7 @@ index 4d845c7..60becae 100644
      D3D12_RESOURCE_STATES SetResourceState(D3D12_RESOURCE_STATES new_state) {
        D3D12_RESOURCE_STATES old_state = resource_state_;
        resource_state_ = new_state;
-@@ -269,6 +289,18 @@ class D3D12TextureCache final : public TextureCache {
+@@ -269,6 +301,18 @@ class D3D12TextureCache final : public TextureCache {
      }
  
     private:
@@ -384,7 +507,7 @@ index 4d845c7..60becae 100644
      Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
      D3D12_RESOURCE_STATES resource_state_;
      std::unique_ptr<D3D12Texture> texture_3d_as_2d_;
-@@ -402,6 +434,9 @@ class D3D12TextureCache final : public TextureCache {
+@@ -402,6 +446,9 @@ class D3D12TextureCache final : public TextureCache {
    // or UINT32_MAX if failed to create.
    uint32_t FindOrCreateTextureDescriptor(D3D12Texture& texture, xenos::DataDimension dimension,
                                           bool is_signed, uint32_t host_swizzle);
@@ -394,7 +517,7 @@ index 4d845c7..60becae 100644
    void ReleaseTextureDescriptor(uint32_t descriptor_index);
    D3D12_CPU_DESCRIPTOR_HANDLE GetTextureDescriptorCPUHandle(uint32_t descriptor_index) const;
  
-@@ -457,6 +492,15 @@ class D3D12TextureCache final : public TextureCache {
+@@ -457,6 +504,15 @@ class D3D12TextureCache final : public TextureCache {
    D3D12CommandProcessor& command_processor_;
    bool bindless_resources_used_;
  
@@ -410,7 +533,7 @@ index 4d845c7..60becae 100644
    Microsoft::WRL::ComPtr<ID3D12RootSignature> load_root_signature_;
    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount> load_pipelines_;
    // Load pipelines for resolution-scaled resolve targets.
-@@ -539,6 +583,14 @@ class D3D12TextureCache final : public TextureCache {
+@@ -539,6 +595,14 @@ class D3D12TextureCache final : public TextureCache {
    // Range used in the last successful MakeScaledResolveRangeCurrent call.
    uint64_t scaled_resolve_current_range_start_scaled_;
    uint64_t scaled_resolve_current_range_length_scaled_;
@@ -426,10 +549,18 @@ index 4d845c7..60becae 100644
  
  }  // namespace rex::graphics::d3d12
 diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
-index a609178..8dac8c5 100644
+index a609178..1cea20d 100644
 --- a/include/rex/graphics/flags.h
 +++ b/include/rex/graphics/flags.h
-@@ -52,6 +52,7 @@ REXCVAR_DECLARE(uint32_t, render_target_lifecycle_trace_limit);
+@@ -43,6 +43,7 @@ REXCVAR_DECLARE(bool, native_2x_msaa);
+ REXCVAR_DECLARE(bool, snorm16_render_target_full_range);
+ REXCVAR_DECLARE(bool, mrt_edram_used_range_clamp_to_min);
+ REXCVAR_DECLARE(bool, direct_host_resolve);
++REXCVAR_DECLARE(bool, host_render_targets_unscaled_depth_only);
+ REXCVAR_DECLARE(bool, render_target_lifecycle_trace);
+ REXCVAR_DECLARE(uint32_t, render_target_lifecycle_trace_limit);
+ 
+@@ -52,6 +53,7 @@ REXCVAR_DECLARE(uint32_t, render_target_lifecycle_trace_limit);
  bool AcquireRenderTargetLifecycleTraceEvent(uint64_t& sequence_out);
  
  // GPU Textures
@@ -438,10 +569,41 @@ index a609178..8dac8c5 100644
  REXCVAR_DECLARE(bool, gpu_3d_to_2d_texture);
  REXCVAR_DECLARE(int32_t, anisotropic_override);
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index 18e6b14..4de66cb 100644
+index 18e6b14..3eb5a40 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
-@@ -171,6 +171,9 @@ class RenderTargetCache {
+@@ -164,6 +164,30 @@ class RenderTargetCache {
+     return draw_resolution_scale_x() > 1 || draw_resolution_scale_y() > 1;
+   }
+ 
++  // Scale of the attachments selected by the last Update (global scale is immutable).
++  uint32_t GetLastUpdateResolutionScaleX() const;
++  uint32_t GetLastUpdateResolutionScaleY() const;
++
++  // Backend opt-in: store guest MSAA samples as single-sampled pixel blocks.
++  // EDRAM pitches and resolve registers still describe the guest sample grid.
++  virtual bool IsHostRenderTargetSampleGrid() const { return false; }
++  // Collapse uses a pixel-addressed 1x layout for both resources and ownership.
++  virtual bool IsHostRenderTargetMsaaCollapsed() const { return false; }
++  xenos::MsaaSamples GetHostRenderTargetMsaaSamples(xenos::MsaaSamples samples) const {
++    return (IsHostRenderTargetSampleGrid() || IsHostRenderTargetMsaaCollapsed())
++               ? xenos::MsaaSamples::k1X
++               : samples;
++  }
++  void GetHostRenderTargetDrawScale(xenos::MsaaSamples samples, uint32_t& scale_x,
++                                    uint32_t& scale_y) const {
++    scale_x = draw_resolution_scale_x();
++    scale_y = draw_resolution_scale_y();
++    if (IsHostRenderTargetSampleGrid()) {
++      scale_x <<= uint32_t(samples >= xenos::MsaaSamples::k4X);
++      scale_y <<= uint32_t(samples >= xenos::MsaaSamples::k2X);
++    }
++  }
++
+   // Virtual (both the common code and the implementation may do something
+   // here), don't call from destructors (does work not needed for shutdown
+   // also).
+@@ -171,6 +195,9 @@ class RenderTargetCache {
  
    virtual void BeginFrame();
  
@@ -451,15 +613,73 @@ index 18e6b14..4de66cb 100644
    virtual bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
                        uint32_t normalized_color_mask, const Shader& vertex_shader);
  
-@@ -497,6 +500,7 @@ class RenderTargetCache {
+@@ -195,6 +222,8 @@ class RenderTargetCache {
+   const RegisterFile& register_file() const { return register_file_; }
+ 
+   virtual bool IsGammaFormatHostStorageSeparate() const = 0;
++  virtual bool SupportsUnscaledDepthOnly() const { return false; }
++  bool UseUnscaledDepthOnly(uint32_t pitch_pixels, xenos::MsaaSamples samples) const;
+ 
+   // Call last in implementation-specific initialization (when things like path
+   // are initialized by the implementation).
+@@ -234,6 +263,7 @@ class RenderTargetCache {
+       uint32_t is_depth : 1;                                      // 22
+       // Ignoring the blending precision and sRGB.
+       uint32_t resource_format : xenos::kRenderTargetFormatBits;  // 26
++      uint32_t unscaled : 1;                                     // 27
+     };
+ 
+     RenderTargetKey() : key(0) { static_assert_size(*this, sizeof(key)); }
+@@ -281,7 +311,8 @@ class RenderTargetCache {
+ 
+     std::string GetDebugName() const {
+       return fmt::format("RT @ {}t, <{}t>, {}xMSAA, {}", base_tiles, GetPitchTiles(),
+-                         uint32_t(1) << uint32_t(msaa_samples), GetFormatName());
++                         uint32_t(1) << uint32_t(msaa_samples), GetFormatName()) +
++             (unscaled ? ", 1x resolution" : "");
+     }
+   };
+ 
+@@ -473,7 +504,7 @@ class RenderTargetCache {
+   // render pass (on Vulkan, the actually used height is specified in
+   // VkFramebuffer).
+   uint32_t GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+-                                 xenos::MsaaSamples msaa_samples) const;
++                                 xenos::MsaaSamples msaa_samples, bool unscaled = false) const;
+ 
+   virtual RenderTarget* CreateRenderTarget(RenderTargetKey key) = 0;
+ 
+@@ -497,16 +528,17 @@ class RenderTargetCache {
      assert_true(GetPath() == Path::kHostRenderTargets);
      return last_update_transfers_;
    }
 +  uint32_t last_update_depth_overwrite_tiles() const { return last_update_depth_overwrite_tiles_; }
  
    HostDepthStoreRenderTargetConstant GetHostDepthStoreRenderTargetConstant(
-       uint32_t pitch_tiles, bool msaa_2x_supported) const {
-@@ -560,6 +564,27 @@ class RenderTargetCache {
+-      uint32_t pitch_tiles, bool msaa_2x_supported) const {
++      uint32_t pitch_tiles, bool msaa_2x_supported, bool unscaled = false) const {
+     HostDepthStoreRenderTargetConstant constant;
+     constant.pitch_tiles = pitch_tiles;
+     // 3 bits for each.
+     assert_true(draw_resolution_scale_x() <= 7);
+     assert_true(draw_resolution_scale_y() <= 7);
+-    constant.resolution_scale_x = draw_resolution_scale_x();
+-    constant.resolution_scale_y = draw_resolution_scale_y();
++    constant.resolution_scale_x = unscaled ? 1 : draw_resolution_scale_x();
++    constant.resolution_scale_y = unscaled ? 1 : draw_resolution_scale_y();
+     constant.msaa_2x_supported = uint32_t(msaa_2x_supported);
+     return constant;
+   }
+@@ -514,7 +546,7 @@ class RenderTargetCache {
+                                       xenos::MsaaSamples msaa_samples,
+                                       HostDepthStoreRectangleConstant& rectangle_constant_out,
+                                       uint32_t& group_count_x_out,
+-                                      uint32_t& group_count_y_out) const;
++                                      uint32_t& group_count_y_out, bool unscaled = false) const;
+ 
+   // Returns mappings between ranges within the specified tile rectangle (not
+   // render target texture rectangle - textures may have any pitch they need)
+@@ -560,6 +592,27 @@ class RenderTargetCache {
    void PixelShaderInterlockFullEdramBarrierPlaced();
  
   private:
@@ -487,7 +707,7 @@ index 18e6b14..4de66cb 100644
    const RegisterFile& register_file_;
    uint32_t draw_resolution_scale_x_;
    uint32_t draw_resolution_scale_y_;
-@@ -695,6 +720,7 @@ class RenderTargetCache {
+@@ -695,6 +748,7 @@ class RenderTargetCache {
    // render targets. They are reordered so for one source, all transfers are
    // consecutive in the array.
    std::vector<Transfer> last_update_transfers_[1 + xenos::kMaxColorRenderTargets];
@@ -519,10 +739,30 @@ index ed4452f..1e8a68e 100644
    std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
    std::vector<TextureBinding> texture_bindings_;
 diff --git a/include/rex/graphics/pipeline/shader/dxbc_translator.h b/include/rex/graphics/pipeline/shader/dxbc_translator.h
-index da51522..ddcd76d 100644
+index da51522..f674a08 100644
 --- a/include/rex/graphics/pipeline/shader/dxbc_translator.h
 +++ b/include/rex/graphics/pipeline/shader/dxbc_translator.h
-@@ -236,6 +236,13 @@ class DxbcShaderTranslator : public ShaderTranslator {
+@@ -111,7 +111,7 @@ class DxbcShaderTranslator : public ShaderTranslator {
+     // If anything in this is structure is changed in a way not compatible with
+     // the previous layout, invalidate the pipeline storages by increasing this
+     // version number (0xYYYYMMDD)!
+-    static constexpr uint32_t kVersion = 0x20260904;
++    static constexpr uint32_t kVersion = 0x20261025;
+ 
+     enum class DepthStencilMode : uint32_t {
+       kNoModifiers,
+@@ -176,6 +176,10 @@ class DxbcShaderTranslator : public ShaderTranslator {
+       uint32_t dynamic_addressable_register_count : 8;
+       // Non-ROV - depth / stencil output mode.
+       DepthStencilMode depth_stencil_mode : 2;
++      // Guest sample grid for single-sampled host storage; k1X = normal.
++      // Collapse keeps guest sample 0 coverage without expanding coordinates.
++      uint32_t host_render_target_msaa_collapsed : 1;
++      xenos::MsaaSamples host_render_target_sample_grid : xenos::kMsaaSamplesBits;
+     } pixel;
+ 
+     explicit Modification(uint64_t modification_value = 0) : value(modification_value) {
+@@ -236,6 +240,13 @@ class DxbcShaderTranslator : public ShaderTranslator {
      // taking into account the potential relation with occlusion queries (but
      // should be safe at least temporarily).
      kSysFlag_ROVDepthStencilEarlyWrite_Shift,
@@ -536,7 +776,7 @@ index da51522..ddcd76d 100644
  
      kSysFlag_Count,
  
-@@ -260,6 +267,7 @@ class DxbcShaderTranslator : public ShaderTranslator {
+@@ -260,6 +271,7 @@ class DxbcShaderTranslator : public ShaderTranslator {
      kSysFlag_ROVDepthWrite = 1u << kSysFlag_ROVDepthWrite_Shift,
      kSysFlag_ROVStencilTest = 1u << kSysFlag_ROVStencilTest_Shift,
      kSysFlag_ROVDepthStencilEarlyWrite = 1u << kSysFlag_ROVDepthStencilEarlyWrite_Shift,
@@ -568,10 +808,23 @@ index 4cf3854..5b58284 100644
      Shader& shader_;
      uint64_t modification_;
 diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
-index 9bad85a..cadd984 100644
+index 9bad85a..ec17db0 100644
 --- a/include/rex/graphics/pipeline/texture/cache.h
 +++ b/include/rex/graphics/pipeline/texture/cache.h
-@@ -577,9 +577,12 @@ class TextureCache {
+@@ -80,7 +80,11 @@ class TextureCache {
+   virtual void BeginSubmission(uint64_t new_submission_index);
+   virtual void BeginFrame();
+ 
+-  void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
++  // An unscaled GPU resolve must clear old page flags as well as invalidate
++  // texture bindings. The caller must preserve untouched bytes before changing
++  // a page's representation (the D3D12 depth path only demotes full pages).
++  void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled,
++                           bool scaled = true);
+   // Ensures the memory backing the range in the scaled resolve address space is
+   // allocated and returns whether it is.
+   virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
+@@ -577,9 +581,12 @@ class TextureCache {
    static void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
                              void* context, void* data, uint64_t argument, bool invalidated_by_gpu);
  
@@ -659,6 +912,25 @@ index b05df6a..072f642 100644
    static std::pair<uint32_t, uint32_t> MemoryInvalidationCallbackThunk(
        void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range);
  
+diff --git a/include/rex/graphics/util/draw.h b/include/rex/graphics/util/draw.h
+index 187864b..7542ee8 100644
+--- a/include/rex/graphics/util/draw.h
++++ b/include/rex/graphics/util/draw.h
+@@ -590,9 +590,13 @@ struct ResolveInfo {
+ // color render target formats are properly emulated as -32...32, true if
+ // emulated as snorm, with range limited to -1...1, but with correct blending
+ // within that range.
++// collapse_msaa describes pixel-addressed host RT storage: normalize the local
++// source layout and sample selection before deriving offsets, spans and clears.
++// Destination geometry and the guest register file remain unchanged.
+ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+                     TraceWriter& trace_writer, uint32_t draw_resolution_scale_x,
+                     uint32_t draw_resolution_scale_y, bool fixed_rg16_truncated_to_minus_1_to_1,
+-                    bool fixed_rgba16_truncated_to_minus_1_to_1, ResolveInfo& info_out);
++                    bool fixed_rgba16_truncated_to_minus_1_to_1, ResolveInfo& info_out,
++                    bool collapse_msaa = false);
+ 
+ }  // namespace rex::graphics::draw_util
 diff --git a/include/rex/graphics/util/draw_extent_estimator.h b/include/rex/graphics/util/draw_extent_estimator.h
 index d8ff8ec..13ead92 100644
 --- a/include/rex/graphics/util/draw_extent_estimator.h
@@ -1091,7 +1363,7 @@ index 1ab79a0..b0e96f1 100644
      // We just fake it and say it was visible in case it is read back.
      if (id < 32) {
 diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
-index e296f7d..f4eec2b 100644
+index e296f7d..1f3a94b 100644
 --- a/src/graphics/d3d12/command_processor.cpp
 +++ b/src/graphics/d3d12/command_processor.cpp
 @@ -10,8 +10,12 @@
@@ -1488,15 +1760,16 @@ index e296f7d..f4eec2b 100644
    vertex_buffers_in_sync_[0] = 0;
    vertex_buffers_in_sync_[1] = 0;
  
-@@ -1953,6 +2187,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -1953,6 +2187,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
      return;
    }
    D3D12_RESOURCE_DESC swap_texture_desc = swap_texture_resource->GetDesc();
++  fm4::frame_trace::Present(*register_file_);
 +  fm4::frame_metrics::Frame(swap_texture_desc.Width, swap_texture_desc.Height);
    // The swap gamma / FXAA pass samples source texels by pixel index, but swap
    // textures may be allocation-padded. Prefer the active frontbuffer region
    // from the swap packet, scaled proportionally to the actual source texture.
-@@ -2022,16 +2257,25 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -2022,16 +2258,25 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
    uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
    uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
  
@@ -1526,7 +1799,7 @@ index e296f7d..f4eec2b 100644
          if (use_fxaa) {
            // Make sure the texture of the correct size is available for FXAA.
            if (fxaa_source_texture_) {
-@@ -2143,9 +2387,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -2143,9 +2388,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
            WriteGammaRampSRV(use_pwl_gamma_ramp, apply_gamma_descriptor_gamma_ramp.first);
          }
  
@@ -1539,7 +1812,7 @@ index e296f7d..f4eec2b 100644
  
          if (use_fxaa) {
            fxaa_source_texture_submission_ = submission_current_;
-@@ -2280,6 +2524,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -2280,6 +2525,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
                                  apply_gamma_dest_initial_state);
          }
  
@@ -1553,7 +1826,7 @@ index e296f7d..f4eec2b 100644
          // Need to submit all the commands before giving the image back to the
          // presenter so it can submit its own commands for displaying it to the
          // queue.
-@@ -2291,6 +2542,69 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -2291,6 +2543,69 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
    // End the frame even if did not present for any reason (the image refresher
    // was not called), to prevent leaking per-frame resources.
    EndSubmission(true);
@@ -1623,7 +1896,7 @@ index e296f7d..f4eec2b 100644
  }
  
  void D3D12CommandProcessor::OnPrimaryBufferEnd() {
-@@ -2308,10 +2622,23 @@ Shader* D3D12CommandProcessor::LoadShader(xenos::ShaderType shader_type, uint32_
+@@ -2308,10 +2623,23 @@ Shader* D3D12CommandProcessor::LoadShader(xenos::ShaderType shader_type, uint32_
  bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint32_t index_count,
                                        IndexBufferInfo* index_buffer_info,
                                        bool major_mode_explicit) {
@@ -1647,7 +1920,7 @@ index e296f7d..f4eec2b 100644
    ID3D12Device* device = GetD3D12Provider().GetDevice();
    const RegisterFile& regs = *register_file_;
  
-@@ -2370,8 +2697,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2370,8 +2698,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
  
    // Process primitives.
    PrimitiveProcessor::ProcessingResult primitive_processing_result;
@@ -1659,7 +1932,7 @@ index e296f7d..f4eec2b 100644
    }
    if (!primitive_processing_result.host_draw_vertex_count) {
      // Nothing to draw.
-@@ -2379,28 +2707,60 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2379,28 +2708,70 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
    }
  
    reg::RB_DEPTHCONTROL normalized_depth_control = draw_util::GetNormalizedDepthControl(regs);
@@ -1703,7 +1976,11 @@ index e296f7d..f4eec2b 100644
 +      primitive_processing_result.host_vertex_shader_type,
 +      uint32_t(render_target_cache_->GetPath()) |
 +          (uint32_t(render_target_cache_->depth_float24_round()) << 2) |
-+          (uint32_t(render_target_cache_->depth_float24_convert_in_pixel_shader()) << 3)};
++          (uint32_t(render_target_cache_->depth_float24_convert_in_pixel_shader()) << 3) |
++          ((render_target_cache_->IsHostRenderTargetSampleGrid() ||
++            render_target_cache_->IsHostRenderTargetMsaaCollapsed())
++               ? uint32_t(regs.Get<reg::RB_SURFACE_INFO>().msaa_samples) << 4
++               : 0)};
 +  bool draw_state_hit = cache_draw_state && draw_state_key == previous_draw_state_key_;
 +  DxbcShaderTranslator::Modification vertex_shader_modification(0);
 +  DxbcShaderTranslator::Modification pixel_shader_modification(0);
@@ -1737,12 +2014,18 @@ index e296f7d..f4eec2b 100644
 +  }
 +
 +  // Keep ownership transfers, extent estimation and barriers on every draw.
++  fm4::frame_trace::DrawScope fm4_trace_draw(
++      regs, *vertex_shader, pixel_shader,
++      fm4::frame_trace::Active() ? static_cast<D3D12Shader*>(active_pixel_shader()) : nullptr,
++      primitive_type, index_count,
++      primitive_processing_result.host_draw_vertex_count, normalized_depth_control,
++      normalized_color_mask);
 +  render_target_cache_->SetDrawStateGeneration(cache_draw_state ? render_target_state_generation_
 +                                                                : 0);
    if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
                                      normalized_color_mask, *vertex_shader)) {
      return false;
-@@ -2432,7 +2792,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2432,7 +2803,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
    if (!pipeline_cache_->ConfigurePipeline(
            vertex_shader_translation, pixel_shader_translation, primitive_processing_result,
            normalized_depth_control, normalized_color_mask, bound_depth_and_color_render_target_bits,
@@ -1752,7 +2035,7 @@ index e296f7d..f4eec2b 100644
      return false;
    }
    if (REXCVAR_GET(async_shader_compilation) &&
-@@ -2444,7 +2805,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2444,7 +2816,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
    uint32_t used_texture_mask =
        vertex_shader->GetUsedTextureMaskAfterTranslation() |
        (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
@@ -1764,7 +2047,16 @@ index e296f7d..f4eec2b 100644
  
    // Bind the pipeline after configuring it and doing everything that may bind
    // other pipelines.
-@@ -2462,41 +2826,66 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2455,48 +2830,73 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   }
+ 
+   // Get dynamic rasterizer state.
+-  uint32_t draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x();
+-  uint32_t draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y();
++  uint32_t draw_resolution_scale_x = render_target_cache_->GetLastUpdateResolutionScaleX();
++  uint32_t draw_resolution_scale_y = render_target_cache_->GetLastUpdateResolutionScaleY();
+ 
+   bool convert_z_to_float24 =
        host_render_targets_used && render_target_cache_->depth_float24_convert_in_pixel_shader();
    bool ps_writes_depth = pixel_shader && pixel_shader->writes_depth();
  
@@ -1860,11 +2152,12 @@ index e296f7d..f4eec2b 100644
    UpdateFixedFunctionState(viewport_info, scissor, primitive_polygonal, normalized_depth_control);
  
    // Update system constants before uploading them.
-@@ -2655,6 +3044,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2655,6 +3055,21 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
    // Must not call anything that may change the primitive topology from now on!
  
    // Draw.
 +  auto trace_rt_draw = [&] {
++    if (fm4::frame_trace::enabled) fm4_trace_draw.submitted = true;
 +    if (uint64_t order = fm4::frame_metrics::NextRTOrderEvent()) {
 +      const uint32_t pass_regs[] = {
 +          regs[XE_GPU_REG_RB_SURFACE_INFO], regs[XE_GPU_REG_RB_COLOR_INFO],
@@ -1881,7 +2174,7 @@ index e296f7d..f4eec2b 100644
    if (primitive_processing_result.index_buffer_type ==
        PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
      if (memexport_used) {
-@@ -2665,6 +3068,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2665,6 +3080,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
      SubmitBarriers();
      PROFILE_DRAW_CALL();
      PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
@@ -1889,7 +2182,7 @@ index e296f7d..f4eec2b 100644
      deferred_command_list_.D3DDrawInstanced(primitive_processing_result.host_draw_vertex_count, 1,
                                              0, 0);
    } else {
-@@ -2724,6 +3128,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2724,6 +3140,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
      SubmitBarriers();
      PROFILE_DRAW_CALL();
      PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
@@ -1897,7 +2190,7 @@ index e296f7d..f4eec2b 100644
      deferred_command_list_.D3DDrawIndexedInstanced(
          primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
      if (scratch_index_buffer != nullptr) {
-@@ -2935,6 +3340,11 @@ bool D3D12CommandProcessor::IssueCopy() {
+@@ -2935,6 +3352,11 @@ bool D3D12CommandProcessor::IssueCopy() {
      return false;
    }
    ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
@@ -1909,7 +2202,7 @@ index e296f7d..f4eec2b 100644
    if (readback_mode == ReadbackResolveMode::kDisabled) {
      uint32_t written_address, written_length;
      return render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
-@@ -2944,9 +3354,22 @@ bool D3D12CommandProcessor::IssueCopy() {
+@@ -2944,9 +3366,22 @@ bool D3D12CommandProcessor::IssueCopy() {
  }
  
  bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
@@ -1934,7 +2227,7 @@ index e296f7d..f4eec2b 100644
      return false;
    }
  
-@@ -2958,8 +3381,24 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -2958,8 +3393,24 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
      return true;
    }
  
@@ -1960,7 +2253,7 @@ index e296f7d..f4eec2b 100644
      return true;
    }
  
-@@ -3080,7 +3519,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3080,7 +3531,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
      const FormatInfo* format_info = FormatInfo::Get(uint32_t(copy_dest_info.copy_dest_format));
      uint32_t bits_per_pixel = format_info->bits_per_pixel;
      if (bits_per_pixel != 8 && bits_per_pixel != 16 && bits_per_pixel != 32 &&
@@ -1969,7 +2262,7 @@ index e296f7d..f4eec2b 100644
        return true;
      }
  
-@@ -3088,14 +3527,13 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3088,14 +3539,13 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
      if (!rex::bit_scan_forward(bits_per_pixel >> 3, &pixel_size_log2)) {
        return true;
      }
@@ -1991,7 +2284,7 @@ index e296f7d..f4eec2b 100644
      if (!scaled_length) {
        return true;
      }
-@@ -3122,6 +3560,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3122,6 +3572,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
        }
        resolve_downscale_buffer_.Attach(buffer);
        resolve_downscale_buffer_size_ = downscale_buffer_size;
@@ -1999,7 +2292,7 @@ index e296f7d..f4eec2b 100644
      }
  
      if (!resolve_downscale_buffer_) {
-@@ -3156,7 +3595,16 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3156,7 +3607,16 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
      ui::d3d12::util::CreateBufferRawUAV(device, downscale_descriptors[1].first,
                                          resolve_downscale_buffer_.Get(), aligned_written_length, 0);
  
@@ -2017,7 +2310,7 @@ index e296f7d..f4eec2b 100644
      texture_cache_->TransitionCurrentScaledResolveRange(
          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
      SubmitBarriers();
-@@ -3167,7 +3615,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3167,7 +3627,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
      constants.scale_x = texture_cache_->draw_resolution_scale_x();
      constants.scale_y = texture_cache_->draw_resolution_scale_y();
      constants.pixel_size_log2 = pixel_size_log2;
@@ -2026,7 +2319,7 @@ index e296f7d..f4eec2b 100644
      constants.half_pixel_offset = (REXCVAR_GET(readback_resolve_half_pixel_offset) &&
                                     (constants.scale_x > 1 || constants.scale_y > 1))
                                        ? 1u
-@@ -3179,11 +3627,14 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3179,11 +3639,14 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
          UINT(ResolveDownscaleRootParameter::kSource), downscale_descriptors[0].second);
      deferred_command_list_.D3DSetComputeRootDescriptorTable(
          UINT(ResolveDownscaleRootParameter::kDestination), downscale_descriptors[1].second);
@@ -2043,7 +2336,7 @@ index e296f7d..f4eec2b 100644
      if (use_resolve_host_copy) {
        shared_memory_->UseReadbackResolveHostAsCopyDestination();
      }
-@@ -3191,10 +3642,16 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3191,10 +3654,16 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
      deferred_command_list_.D3DCopyBufferRegion(resolve_readback_destination,
                                                 resolve_readback_destination_offset,
                                                 resolve_downscale_buffer_.Get(), 0, written_length);
@@ -2064,7 +2357,7 @@ index e296f7d..f4eec2b 100644
    } else {
      shared_memory_->UseAsCopySource();
      if (use_resolve_host_copy) {
-@@ -3208,6 +3665,10 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3208,6 +3677,10 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
    }
  
    if (use_resolve_host_copy) {
@@ -2075,7 +2368,7 @@ index e296f7d..f4eec2b 100644
      const auto wait_begin = std::chrono::steady_clock::now();
      const bool wait_ok = AwaitAllQueueOperationsCompletion();
      ++rb_stat_sync_waits_;
-@@ -3219,6 +3680,8 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3219,6 +3692,8 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
            "Direct resolve host copy queue wait failed; subsequent resolves "
            "will continue using the configured path");
      }
@@ -2084,7 +2377,7 @@ index e296f7d..f4eec2b 100644
      return true;
    }
  
-@@ -3265,10 +3728,204 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+@@ -3265,10 +3740,204 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
    }
  
    rb.current_index = 1 - rb.current_index;
@@ -2289,7 +2582,7 @@ index e296f7d..f4eec2b 100644
    if (await_submission >= submission_current_) {
      if (submission_open_) {
        EndSubmission(false);
-@@ -3280,11 +3937,11 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
+@@ -3280,11 +3949,11 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
      if (queue_operations_done_since_submission_signal_) {
        UINT64 fence_value = ++queue_operations_since_submission_fence_last_;
        ID3D12CommandQueue* direct_queue = GetD3D12Provider().GetDirectQueue();
@@ -2304,7 +2597,7 @@ index e296f7d..f4eec2b 100644
          queue_operations_done_since_submission_signal_ = false;
        } else {
          REXGPU_ERROR(
-@@ -3299,11 +3956,12 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
+@@ -3299,11 +3968,12 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
  
    uint64_t submission_completed_before = submission_completed_;
    submission_completed_ = submission_fence_->GetCompletedValue();
@@ -2318,7 +2611,7 @@ index e296f7d..f4eec2b 100644
        submission_completed_ = submission_fence_->GetCompletedValue();
      }
    }
-@@ -3546,6 +4204,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
+@@ -3546,6 +4216,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
  }
  
  bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
@@ -2326,7 +2619,7 @@ index e296f7d..f4eec2b 100644
    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
  
    // Make sure there is a command allocator to write commands to.
-@@ -3582,7 +4241,10 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
+@@ -3582,7 +4253,10 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
        active_occlusion_query_ = {};
      }
  
@@ -2338,7 +2631,7 @@ index e296f7d..f4eec2b 100644
  
      // Submit barriers now because resources with the queued barriers may be
      // destroyed between frames.
-@@ -3597,12 +4259,37 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
+@@ -3597,12 +4271,37 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
      // happens between Xenia submissions.
      ID3D12CommandAllocator* command_allocator =
          command_allocator_writable_first_->command_allocator;
@@ -2381,7 +2674,7 @@ index e296f7d..f4eec2b 100644
      command_allocator_writable_first_->last_usage_submission = submission_current_;
      if (command_allocator_submitted_last_) {
        command_allocator_submitted_last_->next = command_allocator_writable_first_;
-@@ -3643,6 +4330,7 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
+@@ -3643,6 +4342,7 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
  
      if (cache_clear_requested_ && AwaitAllQueueOperationsCompletion()) {
        cache_clear_requested_ = false;
@@ -2389,7 +2682,7 @@ index e296f7d..f4eec2b 100644
  
        ClearCommandAllocatorCache();
  
-@@ -3764,16 +4452,99 @@ void D3D12CommandProcessor::UpdateFixedFunctionState(
+@@ -3764,16 +4464,99 @@ void D3D12CommandProcessor::UpdateFixedFunctionState(
    }
  }
  
@@ -2471,8 +2764,8 @@ index e296f7d..f4eec2b 100644
 +                      (uint32_t(render_target_cache_->IsFixed16TruncatedToMinus1To1()) << 5);
 +    state_key.depth_control = normalized_depth_control.value;
 +    state_key.color_mask = normalized_color_mask;
-+    state_key.scale_x = texture_cache_->draw_resolution_scale_x();
-+    state_key.scale_y = texture_cache_->draw_resolution_scale_y();
++    state_key.scale_x = render_target_cache_->GetLastUpdateResolutionScaleX();
++    state_key.scale_y = render_target_cache_->GetLastUpdateResolutionScaleY();
 +    std::memcpy(state_key.xy_extent, viewport_info.xy_extent, sizeof(state_key.xy_extent));
 +    if (state_key.generation && state_key == previous_system_state_key_) {
 +      dynamic_dirty |= UpdateSystemTextureValues(used_texture_mask);
@@ -2489,7 +2782,7 @@ index e296f7d..f4eec2b 100644
    auto pa_cl_clip_cntl = regs.Get<reg::PA_CL_CLIP_CNTL>();
    auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
    auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
-@@ -3786,9 +4557,6 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3786,14 +4569,11 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
    auto sq_context_misc = regs.Get<reg::SQ_CONTEXT_MISC>();
    auto sq_program_cntl = regs.Get<reg::SQ_PROGRAM_CNTL>();
    auto vgt_draw_initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
@@ -2499,7 +2792,14 @@ index e296f7d..f4eec2b 100644
  
    bool edram_rov_used =
        render_target_cache_->GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
-@@ -3830,7 +4598,7 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+-  uint32_t draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x();
+-  uint32_t draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y();
++  uint32_t draw_resolution_scale_x = render_target_cache_->GetLastUpdateResolutionScaleX();
++  uint32_t draw_resolution_scale_y = render_target_cache_->GetLastUpdateResolutionScaleY();
+ 
+   // Get the color info register values for each render target. Also, for ROV,
+   // exclude components that don't exist in the format from the write mask.
+@@ -3830,7 +4610,7 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
      }
    }
  
@@ -2508,7 +2808,7 @@ index e296f7d..f4eec2b 100644
  
    // Flags.
    uint32_t flags = 0;
-@@ -3882,6 +4650,16 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3882,6 +4662,16 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
        }
      }
    }
@@ -2525,7 +2825,7 @@ index e296f7d..f4eec2b 100644
    if (edram_rov_used && depth_stencil_enabled) {
      flags |= DxbcShaderTranslator::kSysFlag_ROVDepthStencil;
      if (normalized_depth_control.z_enable) {
-@@ -3918,25 +4696,6 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3918,25 +4708,6 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
    dirty |= system_constants_.tessellation_factor_range_max != tessellation_factor_max;
    system_constants_.tessellation_factor_range_max = tessellation_factor_max;
  
@@ -2551,7 +2851,7 @@ index e296f7d..f4eec2b 100644
    // User clip planes (UCP_ENA_#), when not CLIP_DISABLE.
    // The shader knows only the total count - tightly packing the user clip
    // planes that are actually used.
-@@ -3956,14 +4715,6 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3956,14 +4727,6 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
      }
    }
  
@@ -2566,7 +2866,7 @@ index e296f7d..f4eec2b 100644
    // Point size.
    if (vgt_draw_initiator.prim_type == xenos::PrimitiveType::kPointList) {
      auto pa_su_point_minmax = regs.Get<reg::PA_SU_POINT_MINMAX>();
-@@ -3999,29 +4750,7 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3999,29 +4762,7 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
          point_screen_diameter_to_ndc_radius_y;
    }
  
@@ -2597,7 +2897,7 @@ index e296f7d..f4eec2b 100644
  
    // Log2 of sample count, for alpha to mask and with ROV, for EDRAM address
    // calculation with MSAA.
-@@ -4194,6 +4923,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4194,6 +4935,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                                             const D3D12Shader* pixel_shader,
                                             ID3D12RootSignature* root_signature,
                                             bool shared_memory_is_uav) {
@@ -2605,7 +2905,7 @@ index e296f7d..f4eec2b 100644
    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
    ID3D12Device* device = provider.GetDevice();
    const RegisterFile& regs = *register_file_;
-@@ -4388,7 +5118,18 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4388,7 +5130,18 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
        vertex_shader->GetSamplerBindingsAfterTranslation();
    size_t texture_count_vertex = textures_vertex.size();
    size_t sampler_count_vertex = samplers_vertex.size();
@@ -2625,7 +2925,7 @@ index e296f7d..f4eec2b 100644
      if (current_sampler_layout_uid_vertex_ != sampler_layout_uid_vertex) {
        current_sampler_layout_uid_vertex_ = sampler_layout_uid_vertex;
        cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
-@@ -4397,6 +5138,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4397,6 +5150,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
      current_samplers_vertex_.resize(
          std::max(current_samplers_vertex_.size(), sampler_count_vertex));
      for (size_t i = 0; i < sampler_count_vertex; ++i) {
@@ -2633,7 +2933,7 @@ index e296f7d..f4eec2b 100644
        D3D12TextureCache::SamplerParameters parameters =
            texture_cache_->GetSamplerParameters(samplers_vertex[i]);
        if (current_samplers_vertex_[i] != parameters) {
-@@ -4420,7 +5162,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4420,7 +5174,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
      texture_count_pixel = textures_pixel->size();
      samplers_pixel = &pixel_shader->GetSamplerBindingsAfterTranslation();
      sampler_count_pixel = samplers_pixel->size();
@@ -2642,7 +2942,7 @@ index e296f7d..f4eec2b 100644
        if (current_sampler_layout_uid_pixel_ != sampler_layout_uid_pixel) {
          current_sampler_layout_uid_pixel_ = sampler_layout_uid_pixel;
          cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
-@@ -4429,6 +5171,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4429,6 +5183,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
        current_samplers_pixel_.resize(
            std::max(current_samplers_pixel_.size(), size_t(sampler_count_pixel)));
        for (uint32_t i = 0; i < sampler_count_pixel; ++i) {
@@ -2650,7 +2950,7 @@ index e296f7d..f4eec2b 100644
          D3D12TextureCache::SamplerParameters parameters =
              texture_cache_->GetSamplerParameters((*samplers_pixel)[i]);
          if (current_samplers_pixel_[i] != parameters) {
-@@ -4447,6 +5190,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4447,6 +5202,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
      sampler_count_pixel = 0;
    }
  
@@ -2677,7 +2977,7 @@ index e6d6277..d34293a 100644
          auto& args = *reinterpret_cast<const CopyTextureArguments*>(stream);
          command_list->CopyTextureRegion(&args.dst, 0, 0, 0, &args.src, nullptr);
 diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
-index 8e6b854..c72d1b4 100644
+index 8e6b854..e5aeb3a 100644
 --- a/src/graphics/d3d12/pipeline_cache.cpp
 +++ b/src/graphics/d3d12/pipeline_cache.cpp
 @@ -15,10 +15,13 @@
@@ -3048,7 +3348,27 @@ index 8e6b854..c72d1b4 100644
    shader_storage_cache_root_.clear();
    shader_storage_title_id_ = 0;
  }
-@@ -901,7 +1023,7 @@ bool PipelineCache::ConfigurePipeline(
+@@ -856,9 +978,18 @@ DxbcShaderTranslator::Modification PipelineCache::GetCurrentPixelShaderModificat
+           shader.GetDynamicAddressableRegisterCount(regs.Get<reg::SQ_PROGRAM_CNTL>().ps_num_reg)));
+ 
+   modification.pixel.interpolator_mask = interpolator_mask;
++  modification.pixel.host_render_target_msaa_collapsed =
++      uint32_t(render_target_cache_.IsHostRenderTargetMsaaCollapsed());
++  modification.pixel.host_render_target_sample_grid =
++      (render_target_cache_.IsHostRenderTargetSampleGrid() ||
++       render_target_cache_.IsHostRenderTargetMsaaCollapsed())
++          ? regs.Get<reg::RB_SURFACE_INFO>().msaa_samples
++          : xenos::MsaaSamples::k1X;
+   modification.pixel.interpolators_centroid =
+       interpolator_mask & ~xenos::GetInterpolatorSamplingPattern(
+-                              regs.Get<reg::RB_SURFACE_INFO>().msaa_samples,
++                              render_target_cache_.IsHostRenderTargetMsaaCollapsed()
++                                  ? xenos::MsaaSamples::k1X
++                                  : regs.Get<reg::RB_SURFACE_INFO>().msaa_samples,
+                               regs.Get<reg::SQ_CONTEXT_MISC>().sc_sample_cntl,
+                               regs.Get<reg::SQ_INTERPOLATOR_CNTL>().sampling_pattern);
+ 
+@@ -901,7 +1032,7 @@ bool PipelineCache::ConfigurePipeline(
      reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
      uint32_t bound_depth_and_color_render_target_bits,
      const uint32_t* bound_depth_and_color_render_target_formats, void** pipeline_handle_out,
@@ -3057,7 +3377,7 @@ index 8e6b854..c72d1b4 100644
  #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
    SCOPE_profile_cpu_f("gpu");
  #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
-@@ -978,6 +1100,43 @@ bool PipelineCache::ConfigurePipeline(
+@@ -978,6 +1109,43 @@ bool PipelineCache::ConfigurePipeline(
      }
    }
  
@@ -3101,7 +3421,7 @@ index 8e6b854..c72d1b4 100644
    PipelineRuntimeDescription runtime_description;
    if (!GetCurrentStateDescription(
            vertex_shader, pixel_shader, primitive_processing_result, normalized_depth_control,
-@@ -985,10 +1144,17 @@ bool PipelineCache::ConfigurePipeline(
+@@ -985,10 +1153,17 @@ bool PipelineCache::ConfigurePipeline(
            bound_depth_and_color_render_target_formats, runtime_description, use_async)) {
      return false;
    }
@@ -3119,7 +3439,7 @@ index 8e6b854..c72d1b4 100644
      *pipeline_handle_out = current_pipeline_;
      *root_signature_out = current_pipeline_->root_signature.load(std::memory_order_acquire);
      return true;
-@@ -1002,6 +1168,7 @@ bool PipelineCache::ConfigurePipeline(
+@@ -1002,6 +1177,7 @@ bool PipelineCache::ConfigurePipeline(
      if (!std::memcmp(&found_pipeline->description.description, &description, sizeof(description))) {
        PROFILE_PIPELINE_CACHE_HIT();
        current_pipeline_ = found_pipeline;
@@ -3127,7 +3447,7 @@ index 8e6b854..c72d1b4 100644
        *pipeline_handle_out = found_pipeline;
        *root_signature_out = found_pipeline->root_signature.load(std::memory_order_acquire);
        return true;
-@@ -1050,11 +1217,142 @@ bool PipelineCache::ConfigurePipeline(
+@@ -1050,11 +1226,142 @@ bool PipelineCache::ConfigurePipeline(
    }
  
    current_pipeline_ = new_pipeline;
@@ -3270,7 +3590,7 @@ index 8e6b854..c72d1b4 100644
  bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                              D3D12Shader::D3D12Translation& translation,
                                              IDxbcConverter* dxbc_converter, IDxcUtils* dxc_utils,
-@@ -1063,11 +1361,16 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
+@@ -1063,11 +1370,16 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
  
    // Perform translation.
    // If this fails the shader will be marked as invalid and ignored later.
@@ -3288,7 +3608,34 @@ index 8e6b854..c72d1b4 100644
    const char* host_shader_type;
    if (shader.type() == xenos::ShaderType::kVertex) {
      DxbcShaderTranslator::Modification modification(translation.modification());
-@@ -3028,8 +3331,39 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
+@@ -1424,6 +1736,16 @@ bool PipelineCache::GetCurrentStateDescription(
+         regs.Get<reg::RB_DEPTH_INFO>().depth_format, polygon_offset);
+     description_out.depth_bias_slope_scaled =
+         polygon_offset_scale * xenos::kPolygonOffsetScaleSubpixelUnit;
++    if (render_target_cache_.IsHostRenderTargetSampleGrid()) {
++      uint32_t scale_x, scale_y;
++      render_target_cache_.GetHostRenderTargetDrawScale(
++          regs.Get<reg::RB_SURFACE_INFO>().msaa_samples, scale_x, scale_y);
++      // Pipeline creation already multiplies by the base resolution scale.
++      description_out.depth_bias_slope_scaled *=
++          float(std::max(scale_x, scale_y)) /
++          float(std::max(render_target_cache_.draw_resolution_scale_x(),
++                         render_target_cache_.draw_resolution_scale_y()));
++    }
+   }
+   if (tessellated && REXCVAR_GET(d3d12_tessellation_wireframe)) {
+     description_out.fill_mode_wireframe = 1;
+@@ -1573,7 +1895,8 @@ bool PipelineCache::GetCurrentStateDescription(
+       }
+     }
+   }
+-  xenos::MsaaSamples host_msaa_samples = regs.Get<reg::RB_SURFACE_INFO>().msaa_samples;
++  xenos::MsaaSamples host_msaa_samples = render_target_cache_.GetHostRenderTargetMsaaSamples(
++      regs.Get<reg::RB_SURFACE_INFO>().msaa_samples);
+   if (edram_rov_used) {
+     if (host_msaa_samples == xenos::MsaaSamples::k2X) {
+       // 2 is not supported in ForcedSampleCount on Nvidia.
+@@ -3028,8 +3351,39 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
  
    // Create the D3D12 pipeline state object.
    ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
@@ -3330,7 +3677,7 @@ index 8e6b854..c72d1b4 100644
      if (runtime_description.pixel_shader != nullptr) {
        REXGPU_ERROR("Failed to create graphics pipeline with VS {:016X}, PS {:016X}",
                     runtime_description.vertex_shader->shader().ucode_data_hash(),
-@@ -3040,6 +3374,20 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
+@@ -3040,6 +3394,20 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
      }
      return nullptr;
    }
@@ -3351,7 +3698,7 @@ index 8e6b854..c72d1b4 100644
    std::u16string name;
    if (runtime_description.pixel_shader != nullptr) {
      name = rex::string::to_utf16(fmt::format(
-@@ -3054,6 +3402,11 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
+@@ -3054,6 +3422,11 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
  }
  
  void PipelineCache::StorageWriteThread() {
@@ -3363,7 +3710,7 @@ index 8e6b854..c72d1b4 100644
    ShaderStoredHeader shader_header;
    // Don't leak anything in unused bits.
    std::memset(&shader_header, 0, sizeof(shader_header));
-@@ -3079,9 +3432,11 @@ void PipelineCache::StorageWriteThread() {
+@@ -3079,9 +3452,11 @@ void PipelineCache::StorageWriteThread() {
      const Shader* shader = nullptr;
      PipelineStoredDescription pipeline_description;
      bool write_pipeline = false;
@@ -3376,7 +3723,7 @@ index 8e6b854..c72d1b4 100644
          return;
        }
        if (!storage_write_shader_queue_.empty()) {
-@@ -3100,7 +3455,15 @@ void PipelineCache::StorageWriteThread() {
+@@ -3100,7 +3475,15 @@ void PipelineCache::StorageWriteThread() {
          storage_write_flush_pipelines_ = false;
          flush_pipelines = true;
        }
@@ -3393,7 +3740,7 @@ index 8e6b854..c72d1b4 100644
          storage_write_request_cond_.wait(lock);
          continue;
        }
-@@ -3123,6 +3486,9 @@ void PipelineCache::StorageWriteThread() {
+@@ -3123,6 +3506,9 @@ void PipelineCache::StorageWriteThread() {
        }
      }
  
@@ -3403,7 +3750,7 @@ index 8e6b854..c72d1b4 100644
      if (write_pipeline) {
        assert_not_null(pipeline_storage_file_);
        fwrite(&pipeline_description, sizeof(pipeline_description), 1, pipeline_storage_file_);
-@@ -3197,6 +3563,11 @@ bool PipelineCache::PrepareRuntimeDescriptionForQueuedCreation(
+@@ -3197,6 +3583,11 @@ bool PipelineCache::PrepareRuntimeDescriptionForQueuedCreation(
  }
  
  void PipelineCache::CreationThread(size_t thread_index) {
@@ -3416,7 +3763,7 @@ index 8e6b854..c72d1b4 100644
      Pipeline* pipeline_to_create = nullptr;
  
 diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
-index 4dd8332..5f9b42e 100644
+index 4dd8332..8a8048b 100644
 --- a/src/graphics/d3d12/render_target_cache.cpp
 +++ b/src/graphics/d3d12/render_target_cache.cpp
 @@ -14,9 +14,12 @@
@@ -3432,7 +3779,7 @@ index 4dd8332..5f9b42e 100644
  #include <string>
  #include <tuple>
  #include <utility>
-@@ -25,6 +28,7 @@
+@@ -25,11 +28,13 @@
  #include <rex/cvar.h>
  #include <rex/graphics/d3d12/command_processor.h>
  #include <rex/graphics/d3d12/deferred_command_list.h>
@@ -3440,17 +3787,83 @@ index 4dd8332..5f9b42e 100644
  #include <rex/graphics/d3d12/render_target_cache.h>
  #include <rex/graphics/d3d12/texture_cache.h>
  #include <rex/graphics/flags.h>
-@@ -48,6 +52,9 @@ REXCVAR_DEFINE_STRING(render_target_path_d3d12, "", "GPU/D3D12",
+ #include <rex/graphics/format/dxbc.h>
+ #include <rex/graphics/pipeline/shader/dxbc_translator.h>
++#include <rex/graphics/pipeline/texture/info.h>
+ #include <rex/graphics/trace_writer.h>
+ #include <rex/graphics/util/draw.h>
+ #include <rex/graphics/xenos.h>
+@@ -46,8 +51,25 @@ REXCVAR_DEFINE_STRING(render_target_path_d3d12, "", "GPU/D3D12",
+                       "D3D12 render target implementation path")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
  
++REXCVAR_DEFINE_BOOL(host_render_targets_msaa_collapse, false, "GPU/D3D12",
++                    "With MSAA samples max 1, collapse guest samples to one host pixel")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
  REXCVAR_DEFINE_BOOL(native_stencil_value_output, true, "GPU", "Enable native stencil value output");
  
 +REXCVAR_DEFINE_BOOL(host_render_targets_skip_color_to_depth_transfers, false, "GPU/D3D12",
 +                    "Initialize depth/stencil instead of transferring from color owners (FM4)");
 +
++REXCVAR_DEFINE_INT32(host_render_targets_msaa_samples_max, 0, "GPU/D3D12",
++                     "Host RT MSAA limit when resolution-scaled: 0 = off, 1 = single-sampled "
++                     "(layout selected by host_render_targets_msaa_collapse)")
++    .range(0, 1)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++REXCVAR_DEFINE_BOOL(d3d12_host_resolve_texture_reuse, false, "GPU/D3D12",
++                    "Cache compatible single-sample color resolves directly from host targets")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
  namespace rex::graphics::d3d12 {
  
  // Generated with `xb buildshaders`.
-@@ -1059,7 +1066,11 @@ void D3D12RenderTargetCache::BeginSubmission() {
+@@ -171,6 +193,8 @@ D3D12RenderTargetCache::~D3D12RenderTargetCache() {
+ }
+ 
+ bool D3D12RenderTargetCache::Initialize() {
++  host_render_target_sample_grid_ = false;
++  host_render_target_msaa_collapsed_ = false;
+   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+   ID3D12Device* device = provider.GetDevice();
+ 
+@@ -293,8 +317,9 @@ bool D3D12RenderTargetCache::Initialize() {
+   // Binding all of the shared memory at 1x resolution, portions with scaled
+   // resolution.
+   resolve_copy_root_parameters[0].Constants.Num32BitValues =
+-      (draw_resolution_scaled ? sizeof(draw_util::ResolveCopyShaderConstants::DestRelative)
+-                              : sizeof(draw_util::ResolveCopyShaderConstants)) /
++      (draw_resolution_scaled && !REXCVAR_GET(host_render_targets_unscaled_depth_only)
++           ? sizeof(draw_util::ResolveCopyShaderConstants::DestRelative)
++           : sizeof(draw_util::ResolveCopyShaderConstants)) /
+       sizeof(uint32_t);
+   resolve_copy_root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+   // Parameter 1 is the destination (shared memory).
+@@ -379,6 +404,12 @@ bool D3D12RenderTargetCache::Initialize() {
+   if (path_ == Path::kHostRenderTargets) {
+     // Host render targets.
+ 
++    bool force_single_sample =
++        IsDrawResolutionScaled() && REXCVAR_GET(host_render_targets_msaa_samples_max) == 1;
++    host_render_target_msaa_collapsed_ =
++        force_single_sample && REXCVAR_GET(host_render_targets_msaa_collapse);
++    host_render_target_sample_grid_ = force_single_sample && !host_render_target_msaa_collapsed_;
++
+     gamma_render_target_as_unorm16_ = REXCVAR_GET(gamma_render_target_as_unorm16);
+ 
+     depth_float24_round_ = REXCVAR_GET(depth_float24_round);
+@@ -1030,6 +1061,9 @@ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
+   for (size_t i = 0; i < rex::countof(resolve_copy_pipelines_); ++i) {
+     ui::d3d12::util::ReleaseAndNull(resolve_copy_pipelines_[i]);
+   }
++  for (ID3D12PipelineState*& pipeline : resolve_copy_unscaled_pipelines_) {
++    ui::d3d12::util::ReleaseAndNull(pipeline);
++  }
+   ui::d3d12::util::ReleaseAndNull(resolve_copy_root_signature_);
+ 
+   edram_snapshot_restore_pool_.reset();
+@@ -1059,10 +1093,20 @@ void D3D12RenderTargetCache::BeginSubmission() {
    if (edram_buffer_modification_status_ != EdramBufferModificationStatus::kUnmodified) {
      assert_true(edram_buffer_state_ == D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
      edram_buffer_modification_status_ = EdramBufferModificationStatus::kUnmodified;
@@ -3463,7 +3876,16 @@ index 4dd8332..5f9b42e 100644
    }
  }
  
-@@ -1072,6 +1083,24 @@ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
++bool D3D12RenderTargetCache::SupportsUnscaledDepthOnly() const {
++  // Sample-grid storage is a separate opt-in layout. Query readback is
++  // normalized by global area scale; keep all draws in a query at that scale.
++  return !IsHostRenderTargetSampleGrid() && !command_processor_.HasActiveOcclusionQuery();
++}
++
+ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
+                                     reg::RB_DEPTHCONTROL normalized_depth_control,
+                                     uint32_t normalized_color_mask, const Shader& vertex_shader) {
+@@ -1072,6 +1116,25 @@ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
    }
    switch (GetPath()) {
      case Path::kHostRenderTargets: {
@@ -3478,17 +3900,93 @@ index 4dd8332..5f9b42e 100644
 +        draw_util::GetScissor(regs, scissor);
 +        REXGPU_INFO("FM4 RT order: n={} frame={} op=draw_setup key={:016X} "
 +                    "depth_control={:08X} stencil_mask={:08X} shader={:016X} "
-+                    "scissor={},{},{},{} overwrite_tiles={}",
++                    "scissor={},{},{},{} overwrite_tiles={} scale={}x{}",
 +                    order, fm4::frame_metrics::Get().swaps,
 +                    fm4::frame_metrics::PassKey(pass_regs, 8), normalized_depth_control.value,
 +                    regs[XE_GPU_REG_RB_STENCILREFMASK], vertex_shader.ucode_data_hash(),
 +                    scissor.offset[0], scissor.offset[1], scissor.extent[0], scissor.extent[1],
-+                    last_update_depth_overwrite_tiles());
++                    last_update_depth_overwrite_tiles(), GetLastUpdateResolutionScaleX(),
++                    GetLastUpdateResolutionScaleY());
 +      }
        RenderTarget* const* depth_and_color_render_targets =
            last_update_accumulated_render_targets();
        PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
-@@ -1208,6 +1237,19 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1178,11 +1241,58 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+   bool fixed_16_truncated_to_minus_1_to_1 = IsFixed16TruncatedToMinus1To1();
+   if (!draw_util::GetResolveInfo(register_file(), memory, trace_writer_, draw_resolution_scale_x(),
+                                  draw_resolution_scale_y(), fixed_16_truncated_to_minus_1_to_1,
+-                                 fixed_16_truncated_to_minus_1_to_1, resolve_info)) {
++                                 fixed_16_truncated_to_minus_1_to_1, resolve_info, IsHostRenderTargetMsaaCollapsed())) {
+     draw_util::LogResolveFailureState(register_file(), memory);
+     return false;
+   }
+ 
++  bool unscaled_resolve = false;
++  // Only demote completely overwritten 4 KB pages. Partial/array/padded
++  // destinations retain the global representation, including mixed owners.
++  // This also avoids interpreting untouched scaled pixels as native memory.
++  if (GetPath() == Path::kHostRenderTargets && IsDrawResolutionScaled() &&
++      REXCVAR_GET(host_render_targets_unscaled_depth_only) && resolve_info.IsCopyingDepth() &&
++      resolve_info.copy_dest_extent_length) {
++    uint32_t width = uint32_t(resolve_info.coordinate_info.width_div_8) << 3;
++    uint32_t height = resolve_info.height_div_8 << 3;
++    auto dest_pitch = register_file().Get<reg::RB_COPY_DEST_PITCH>();
++    const FormatInfo& format = *FormatInfo::Get(
++        xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format));
++    bool full_pages = !resolve_info.copy_dest_info.copy_dest_array && format.bits_per_pixel == 32 &&
++        !(resolve_info.copy_dest_extent_start & 4095) && !(width & 31) && !(height & 31) &&
++        width == dest_pitch.copy_dest_pitch &&
++        !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
++        !resolve_info.copy_dest_coordinate_info.offset_y_div_8 &&
++        resolve_info.copy_dest_base == resolve_info.copy_dest_extent_start &&
++        uint64_t(width) * height * 4 == resolve_info.copy_dest_extent_length;
++    if (full_pages) {
++      uint32_t base, row_length, rows, pitch;
++      resolve_info.GetCopyEdramTileSpan(base, row_length, rows, pitch);
++      GetResolveCopyRectanglesToDump(base, row_length, rows, pitch, dump_rectangles_);
++      bool all_unscaled = !dump_rectangles_.empty();
++      uint64_t owned_tiles = 0;
++      for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
++        all_unscaled &= rectangle.render_target->key().unscaled != 0;
++        owned_tiles += rectangle.rows == 1
++            ? rectangle.row_last_end - rectangle.row_first_start
++            : uint64_t(rectangle.rows - 2) * row_length + row_length -
++                  rectangle.row_first_start + rectangle.row_last_end;
++      }
++      unscaled_resolve = all_unscaled && owned_tiles == uint64_t(row_length) * rows;
++    }
++    if (unscaled_resolve) {
++      // Recreate constants so the half-pixel fill workaround is disabled too.
++      if (!draw_util::GetResolveInfo(register_file(), memory, trace_writer_, 1, 1,
++                                    fixed_16_truncated_to_minus_1_to_1,
++                                    fixed_16_truncated_to_minus_1_to_1, resolve_info, IsHostRenderTargetMsaaCollapsed())) {
++        return false;
++      }
++      draw_resolution_scaled = false;
++    }
++  }
++  uint32_t resolve_scale_x = unscaled_resolve ? 1 : draw_resolution_scale_x();
++  uint32_t resolve_scale_y = unscaled_resolve ? 1 : draw_resolution_scale_y();
++
+   // Nothing to copy/clear.
+   if (!resolve_info.coordinate_info.width_div_8 || !resolve_info.height_div_8) {
+     return true;
+@@ -1196,18 +1306,32 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+     REXGPU_INFO(
+         "[RT_TRACE #{}] resolve-begin path={} copy={} src={} edram_base={} edram_span={}x{} "
+         "edram_pitch={} dest_base={:08X} dest_extent={:08X}+{:X} rect={}x{} clear_color={} "
+-        "clear_depth={}",
++        "clear_depth={} scale={}x{}",
+         trace_sequence, GetPath() == Path::kHostRenderTargets ? "rtv" : "rov",
+         resolve_info.copy_dest_extent_length != 0,
+         resolve_info.IsCopyingDepth() ? "depth" : "color", copy_edram_base,
+         copy_edram_row_length, copy_edram_rows, copy_edram_pitch, resolve_info.copy_dest_base,
+         resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length,
+         resolve_info.coordinate_info.width_div_8 * 8, resolve_info.height_div_8 * 8,
+-        resolve_info.IsClearingColor(), resolve_info.IsClearingDepth());
++        resolve_info.IsClearingColor(), resolve_info.IsClearingDepth(),
++        resolve_scale_x, resolve_scale_y);
+   }
  
    DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
  
@@ -3508,7 +4006,14 @@ index 4dd8332..5f9b42e 100644
    // Copying.
    bool copied = false;
    const char* copy_route = "none";
-@@ -1221,6 +1263,20 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1215,15 +1339,44 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+     draw_util::ResolveCopyShaderConstants copy_shader_constants;
+     uint32_t copy_group_count_x, copy_group_count_y;
+     draw_util::ResolveCopyShaderIndex copy_shader =
+-        resolve_info.GetCopyShader(draw_resolution_scale_x(), draw_resolution_scale_y(),
++        resolve_info.GetCopyShader(resolve_scale_x, resolve_scale_y,
+                                    copy_shader_constants, copy_group_count_x, copy_group_count_y);
+     assert_true(copy_group_count_x && copy_group_count_y);
      if (copy_shader != draw_util::ResolveCopyShaderIndex::kUnknown) {
        const draw_util::ResolveCopyShaderInfo& copy_shader_info =
            draw_util::resolve_copy_shader_info[size_t(copy_shader)];
@@ -3526,10 +4031,130 @@ index 4dd8332..5f9b42e 100644
 +              resolve_info.copy_dest_base);
 +        }
 +      }
++      ID3D12PipelineState* copy_pipeline = resolve_copy_pipelines_[size_t(copy_shader)];
++      if (unscaled_resolve) {
++        ID3D12PipelineState*& unscaled_pipeline =
++            resolve_copy_unscaled_pipelines_[size_t(copy_shader)];
++        if (!unscaled_pipeline) {
++          const ResolveCopyShaderCode& code = kResolveCopyShaders[size_t(copy_shader)];
++          unscaled_pipeline = ui::d3d12::util::CreateComputePipeline(
++              command_processor_.GetD3D12Provider().GetDevice(), code.unscaled,
++              code.unscaled_size, resolve_copy_root_signature_);
++          if (!unscaled_pipeline) {
++            return false;
++          }
++        }
++        copy_pipeline = unscaled_pipeline;
++      }
        bool direct_resolved = false;
        if (GetPath() == Path::kHostRenderTargets) {
-         if (REXCVAR_GET(direct_host_resolve)) {
-@@ -1361,6 +1417,15 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+-        if (REXCVAR_GET(direct_host_resolve)) {
++        if (REXCVAR_GET(direct_host_resolve) && !unscaled_resolve) {
+           direct_resolved =
+               TryResolveCopyDirectly(resolve_info, copy_shader, draw_resolution_scaled);
+           if (direct_resolved) {
+@@ -1243,7 +1396,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+           uint32_t dump_rows;
+           uint32_t dump_pitch;
+           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+-          if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch)) {
++          if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
++                                 unscaled_resolve)) {
+             REXGPU_ERROR("D3D12RenderTargetCache: Failed to dump host render targets for resolve");
+             return false;
+           }
+@@ -1259,7 +1413,16 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+         // Committing starting with the beginning of the potentially written
+         // extent, but making the buffer containing the base current as the
+         // beginning of the bound buffer is the base.
+-        copy_dest_committed =
++        bool native_pages_ready = true;
++        if (GetPath() == Path::kHostRenderTargets &&
++            REXCVAR_GET(host_render_targets_unscaled_depth_only)) {
++          const FormatInfo& format = *FormatInfo::Get(
++              xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format));
++          native_pages_ready = texture_cache.PrepareScaledResolveNativePages(
++              resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length,
++              rex::log2_floor(format.bits_per_pixel >> 3));
++        }
++        copy_dest_committed = native_pages_ready &&
+             texture_cache.EnsureScaledResolveMemoryCommitted(
+                 resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length) &&
+             texture_cache.MakeScaledResolveRangeCurrent(resolve_info.copy_dest_base,
+@@ -1331,7 +1494,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+             command_list.D3DSetComputeRoot32BitConstants(
+                 0, sizeof(copy_shader_constants) / sizeof(uint32_t), &copy_shader_constants, 0);
+           }
+-          command_processor_.SetExternalPipeline(resolve_copy_pipelines_[size_t(copy_shader)]);
++          command_processor_.SetExternalPipeline(copy_pipeline);
+           command_processor_.SubmitBarriers();
+           command_list.D3DDispatch(copy_group_count_x, copy_group_count_y, 1);
+ 
+@@ -1342,9 +1505,60 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+             shared_memory.MarkUAVWritesCommitNeeded();
+           }
+ 
+-          // Invalidate textures and mark the range as scaled if needed.
+-          texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
+-                                            resolve_info.copy_dest_extent_length);
++          // Snapshot before any resolve clear or subsequent draw can modify the
++          // owner. The guest-layout resolve and readback remain authoritative.
++          auto cache_host_resolve = [&]() {
++            if (!REXCVAR_GET(d3d12_host_resolve_texture_reuse) ||
++                GetPath() != Path::kHostRenderTargets || resolve_info.IsCopyingDepth() ||
++                resolve_info.color_edram_info.msaa_samples != xenos::MsaaSamples::k1X ||
++                copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
++              return false;
++            }
++            uint32_t base, row_length, rows, pitch;
++            resolve_info.GetCopyEdramTileSpan(base, row_length, rows, pitch);
++            if (!pitch || !rows || !row_length ||
++                base + (rows - 1) * pitch + row_length > xenos::kEdramTileCount) {
++              return false;
++            }
++            GetResolveCopyRectanglesToDump(base, row_length, rows, pitch, dump_rectangles_);
++            if (dump_rectangles_.size() != 1) {
++              return false;
++            }
++            const auto& rectangle = dump_rectangles_.front();
++            if (rectangle.row_first || rectangle.rows != rows || rectangle.row_first_start ||
++                rectangle.row_last_end != row_length) {
++              return false;
++            }
++            auto& source = *static_cast<D3D12RenderTarget*>(rectangle.render_target);
++            RenderTargetKey key = source.key();
++            if (key.is_depth || key.msaa_samples != xenos::MsaaSamples::k1X ||
++                key.GetPitchTiles() != pitch ||
++                resolve_info.color_edram_info.base_tiles < key.base_tiles ||
++                !xenos::IsColorResolveFormatBitwiseEquivalent(
++                    key.GetColorFormat(), resolve_info.copy_dest_info.copy_dest_format)) {
++              return false;
++            }
++            uint32_t offset = resolve_info.color_edram_info.base_tiles - key.base_tiles;
++            uint32_t x = (offset % pitch) * xenos::kEdramTileWidthSamples +
++                         resolve_info.coordinate_info.edram_offset_x_div_8 * 8;
++            uint32_t y = (offset / pitch) * xenos::kEdramTileHeightSamples +
++                         resolve_info.coordinate_info.edram_offset_y_div_8 * 8;
++            D3D12_BOX box{x * draw_resolution_scale_x(), y * draw_resolution_scale_y(), 0,
++                          (x + resolve_info.coordinate_info.width_div_8 * 8) *
++                              draw_resolution_scale_x(),
++                          (y + resolve_info.height_div_8 * 8) * draw_resolution_scale_y(), 1};
++            command_processor_.PushTransitionBarrier(
++                source.resource(), source.SetResourceState(D3D12_RESOURCE_STATE_COPY_SOURCE),
++                D3D12_RESOURCE_STATE_COPY_SOURCE);
++            return texture_cache.CacheHostResolve(resolve_info, source.resource(), box);
++          };
++          // CacheHostResolve publishes the snapshots and their watches together
++          // with invalidation, so a CPU write cannot slip between them.
++          if (!cache_host_resolve()) {
++            texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
++                                            resolve_info.copy_dest_extent_length,
++                                            draw_resolution_scaled);
++          }
+           written_address_out = resolve_info.copy_dest_extent_start;
+           written_length_out = resolve_info.copy_dest_extent_length;
+           copied = true;
+@@ -1361,6 +1575,15 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
    }
  
    // Clearing.
@@ -3545,7 +4170,28 @@ index 4dd8332..5f9b42e 100644
    bool cleared = false;
    bool clear_depth = resolve_info.IsClearingDepth();
    bool clear_color = resolve_info.IsClearingColor();
-@@ -1943,7 +2008,8 @@ void D3D12RenderTargetCache::CommitEdramBufferUAVWrites(
+@@ -1449,6 +1672,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+   }
+ 
+   bool succeeded = copied && cleared;
++  fm4::frame_trace::Resolve(resolve_info, register_file(), copied, cleared);
+   if (AcquireRenderTargetLifecycleTraceEvent(trace_sequence)) {
+     REXGPU_INFO(
+         "[RT_TRACE #{}] resolve-end path={} route={} copied={} cleared={} success={} "
+@@ -1750,9 +1974,10 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(Rend
+   D3D12_RESOURCE_DESC resource_desc;
+   resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+   resource_desc.Alignment = 0;
+-  resource_desc.Width = key.GetWidth() * draw_resolution_scale_x();
++  resource_desc.Width = key.GetWidth() * (key.unscaled ? 1 : draw_resolution_scale_x());
+   resource_desc.Height =
+-      GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples) * draw_resolution_scale_y();
++      GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples, key.unscaled) *
++      (key.unscaled ? 1 : draw_resolution_scale_y());
+   resource_desc.DepthOrArraySize = 1;
+   resource_desc.MipLevels = 1;
+   if (key.is_depth) {
+@@ -1943,7 +2168,8 @@ void D3D12RenderTargetCache::CommitEdramBufferUAVWrites(
      command_processor_.PushUAVBarrier(edram_buffer_);
    }
    edram_buffer_modification_status_ = EdramBufferModificationStatus::kUnmodified;
@@ -3555,10 +4201,110 @@ index 4dd8332..5f9b42e 100644
  }
  
  ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines(
-@@ -3999,6 +4065,29 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -2617,8 +2843,12 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   // for the coordinates for that load. Currently 3 temps are enough.
+   a.OpDclTemps(3);
+ 
+-  uint32_t draw_resolution_scale_x = this->draw_resolution_scale_x();
+-  uint32_t draw_resolution_scale_y = this->draw_resolution_scale_y();
++  bool guest_coordinates =
++      key.dest_unscaled || key.source_unscaled || key.host_depth_source_unscaled;
++  uint32_t draw_resolution_scale_x = guest_coordinates ? 1 : this->draw_resolution_scale_x();
++  uint32_t draw_resolution_scale_y = guest_coordinates ? 1 : this->draw_resolution_scale_y();
++  uint32_t dest_scale_x = key.dest_unscaled ? 1 : this->draw_resolution_scale_x();
++  uint32_t dest_scale_y = key.dest_unscaled ? 1 : this->draw_resolution_scale_y();
+ 
+   uint32_t tile_width_samples = xenos::kEdramTileWidthSamples * draw_resolution_scale_x;
+   uint32_t tile_height_samples = xenos::kEdramTileHeightSamples * draw_resolution_scale_y;
+@@ -2627,6 +2857,10 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   // 32bpp-tile-relative pixel index in r0.xy.
+   // r0.xy = pixel XY as uint
+   a.OpFToU(dxbc::Dest::R(0, 0b0011), dxbc::Src::V1D(kInputRegisterPosition));
++  if (guest_coordinates && !key.dest_unscaled) {
++    a.OpUDiv(dxbc::Dest::R(0, 0b0011), dxbc::Dest::Null(), dxbc::Src::R(0),
++             dxbc::Src::LU(dest_scale_x, dest_scale_y, dest_scale_x, dest_scale_y));
++  }
+   uint32_t dest_tile_width_pixels =
+       tile_width_samples >>
+       (uint32_t(dest_is_64bpp) + uint32_t(key.dest_msaa_samples >= xenos::MsaaSamples::k4X));
+@@ -2994,6 +3228,15 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   // the coordinates needed for stencil loading).
+   // Stencil will be loaded to x.
+   // Color will be loaded to x...w.
++  if (guest_coordinates && !key.source_unscaled) {
++    uint32_t scale_x = this->draw_resolution_scale_x();
++    uint32_t scale_y = this->draw_resolution_scale_y();
++    // Point-sample the center subpixel of scaled sources. Upsampling a 1x
++    // owner repeats its guest samples; MSAA sample indices remain separate.
++    a.OpUMAd(dxbc::Dest::R(1, 0b0011), dxbc::Src::R(1),
++             dxbc::Src::LU(scale_x, scale_y, scale_x, scale_y),
++             dxbc::Src::LU(scale_x / 2, scale_y / 2, scale_x / 2, scale_y / 2));
++  }
+   bool source_load_is_two_dwords = !source_is_64bpp && dest_is_64bpp;
+   if (key.source_msaa_samples != xenos::MsaaSamples::k1X) {
+     for (uint32_t i = 0; i <= uint32_t(source_load_is_two_dwords); ++i) {
+@@ -3500,6 +3743,14 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+               // 40-sample columns are not swapped for addressing simplicity
+               // (because this is used for depth -> depth transfers, where
+               // swapping isn't needed).
++              if (guest_coordinates && !key.dest_unscaled) {
++                a.OpUMAd(dxbc::Dest::R(0, 0b0011), dxbc::Src::R(0),
++                         dxbc::Src::LU(dest_scale_x, dest_scale_y, dest_scale_x, dest_scale_y),
++                         dxbc::Src::LU(dest_scale_x / 2, dest_scale_y / 2,
++                                       dest_scale_x / 2, dest_scale_y / 2));
++              }
++              uint32_t scratch_tile_width = xenos::kEdramTileWidthSamples * dest_scale_x;
++              uint32_t scratch_tile_height = xenos::kEdramTileHeightSamples * dest_scale_y;
+               // Convert samples to pixels.
+               assert_true(key.host_depth_source_msaa_samples == xenos::MsaaSamples::k1X);
+               if (key.dest_msaa_samples >= xenos::MsaaSamples::k2X) {
+@@ -3527,10 +3778,10 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+               // The tile index doesn't need to be wrapped, as the host depth is
+               // written to the beginning of the buffer, without the base
+               // offset.
+-              a.OpUMAd(dxbc::Dest::R(0, 0b0001), dxbc::Src::LU(tile_width_samples),
++              a.OpUMAd(dxbc::Dest::R(0, 0b0001), dxbc::Src::LU(scratch_tile_width),
+                        dxbc::Src::R(0, dxbc::Src::kYYYY), dxbc::Src::R(0, dxbc::Src::kXXXX));
+               a.OpUMAd(dxbc::Dest::R(0, 0b0001),
+-                       dxbc::Src::LU(tile_width_samples * tile_height_samples),
++                       dxbc::Src::LU(scratch_tile_width * scratch_tile_height),
+                        dxbc::Src::R(0, dxbc::Src::kZZZZ), dxbc::Src::R(0, dxbc::Src::kXXXX));
+               // Load from the buffer.
+               a.OpLd(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(0, dxbc::Src::kXXXX), 0b0001,
+@@ -3687,6 +3938,13 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+                            tile_height_samples >>
+                            uint32_t(key.host_depth_source_msaa_samples >= xenos::MsaaSamples::k2X)),
+                        dxbc::Src::R(0, dxbc::Src::kZZZZ), dxbc::Src::R(0, dxbc::Src::kYYYY));
++              if (guest_coordinates && !key.host_depth_source_unscaled) {
++                uint32_t scale_x = this->draw_resolution_scale_x();
++                uint32_t scale_y = this->draw_resolution_scale_y();
++                a.OpUMAd(dxbc::Dest::R(0, 0b0011), dxbc::Src::R(0),
++                         dxbc::Src::LU(scale_x, scale_y, scale_x, scale_y),
++                         dxbc::Src::LU(scale_x / 2, scale_y / 2, scale_x / 2, scale_y / 2));
++              }
+               // Load from the host depth texture.
+               if (key.host_depth_source_msaa_samples != xenos::MsaaSamples::k1X) {
+                 a.OpLdMS(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(0), 0b0011,
+@@ -3999,18 +4257,54 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
    DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
  
    bool resolve_clear_needed = render_target_resolve_clear_values && resolve_clear_rectangle;
+-  D3D12_RECT clear_rect;
+-  if (resolve_clear_needed) {
+-    // Assuming the rectangle is already clamped by the setup function from the
+-    // common render target cache.
+-    clear_rect.left = LONG(resolve_clear_rectangle->x_pixels * draw_resolution_scale_x());
+-    clear_rect.top = LONG(resolve_clear_rectangle->y_pixels * draw_resolution_scale_y());
+-    clear_rect.right =
+-        LONG((resolve_clear_rectangle->x_pixels + resolve_clear_rectangle->width_pixels) *
+-             draw_resolution_scale_x());
+-    clear_rect.bottom =
+-        LONG((resolve_clear_rectangle->y_pixels + resolve_clear_rectangle->height_pixels) *
+-             draw_resolution_scale_y());
++  std::unique_ptr<fm4::frame_trace::TransferBatch> fm4_trace_transfers;
++  if (fm4::frame_trace::Active()) {
++    fm4_trace_transfers = std::make_unique<fm4::frame_trace::TransferBatch>(resolve_clear_needed);
++  }
 +  if (uint64_t order = fm4::frame_metrics::NextRTOrderEvent()) {
 +    const RegisterFile& regs = register_file();
 +    const uint32_t pass_regs[] = {
@@ -3582,13 +4328,6 @@ index 4dd8332..5f9b42e 100644
 +      transfer_metrics->depth_overwrite_tiles += last_update_depth_overwrite_tiles();
 +    }
 +  }
-   D3D12_RECT clear_rect;
-   if (resolve_clear_needed) {
-     // Assuming the rectangle is already clamped by the setup function from the
-@@ -4013,6 +4102,29 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
-              draw_resolution_scale_y());
-   }
- 
 +  // Ownership has already been claimed by the common cache. This opt-in
 +  // policy treats color owners as unrelated depth contents, including transfers
 +  // with retained host depth. Filter before scratch stores, barriers, descriptors
@@ -3610,12 +4349,28 @@ index 4dd8332..5f9b42e 100644
 +      }
 +    }
 +    render_target_transfers = filtered_transfers.data();
-+  }
-+
+   }
+ 
    // Do host depth storing for the depth destination (assuming there can be only
-   // one depth destination) where depth destination == host depth source.
-   bool host_depth_store_set_up = false;
-@@ -4103,6 +4215,19 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4064,7 +4358,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+         // Render target constant.
+         HostDepthStoreRenderTargetConstant host_depth_store_render_target_constant =
+             GetHostDepthStoreRenderTargetConstant(dest_rt_key.pitch_tiles_at_32bpp,
+-                                                  msaa_2x_supported_);
++                                                  msaa_2x_supported_, dest_rt_key.unscaled);
+         command_list.D3DSetComputeRoot32BitConstants(
+             kHostDepthStoreRootParameterConstants,
+             sizeof(host_depth_store_render_target_constant) / sizeof(uint32_t),
+@@ -4095,7 +4389,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+         uint32_t group_count_x, group_count_y;
+         GetHostDepthStoreRectangleInfo(transfer_rectangles[j], dest_rt_key.msaa_samples,
+                                        host_depth_store_rectangle_constant, group_count_x,
+-                                       group_count_y);
++                                       group_count_y, dest_rt_key.unscaled);
+         command_list.D3DSetComputeRoot32BitConstants(
+             kHostDepthStoreRootParameterConstants,
+             sizeof(host_depth_store_rectangle_constant) / sizeof(uint32_t),
+@@ -4103,6 +4397,19 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
              offsetof(HostDepthStoreConstants, rectangle) / sizeof(uint32_t));
          command_processor_.SubmitBarriers();
          command_list.D3DDispatch(group_count_x, group_count_y, 1);
@@ -3629,13 +4384,22 @@ index 4dd8332..5f9b42e 100644
 +          ++transfer_metrics->depth_store_dispatches;
 +          transfer_metrics->depth_store_samples +=
 +              uint64_t(transfer_rectangles[j].width_pixels) * transfer_rectangles[j].height_pixels *
-+              draw_resolution_scale_x() * draw_resolution_scale_y() *
++              (dest_rt_key.unscaled ? 1 : draw_resolution_scale_x() * draw_resolution_scale_y()) *
 +              (uint32_t(1) << uint32_t(dest_rt_key.msaa_samples));
 +        }
          MarkEdramBufferModified();
        }
      }
-@@ -4287,7 +4412,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4266,8 +4573,6 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+ 
+   bool transfer_viewport_set = false;
+   float pixels_to_ndc_unscaled = 2.0f / float(D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION);
+-  float pixels_to_ndc_x = pixels_to_ndc_unscaled * draw_resolution_scale_x();
+-  float pixels_to_ndc_y = pixels_to_ndc_unscaled * draw_resolution_scale_y();
+ 
+   TransferRootSignatureIndex last_transfer_root_signature_index =
+       TransferRootSignatureIndex::kCount;
+@@ -4287,12 +4592,31 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
      }
  
      const std::vector<Transfer>& current_transfers = render_target_transfers[i];
@@ -3646,7 +4410,29 @@ index 4dd8332..5f9b42e 100644
        continue;
      }
  
-@@ -4301,6 +4428,51 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+     auto& dest_d3d12_rt = *static_cast<D3D12RenderTarget*>(dest_rt);
+     RenderTargetKey dest_rt_key = dest_d3d12_rt.key();
++    uint32_t dest_scale_x = dest_rt_key.unscaled ? 1 : draw_resolution_scale_x();
++    uint32_t dest_scale_y = dest_rt_key.unscaled ? 1 : draw_resolution_scale_y();
++    float pixels_to_ndc_x = pixels_to_ndc_unscaled * dest_scale_x;
++    float pixels_to_ndc_y = pixels_to_ndc_unscaled * dest_scale_y;
++    D3D12_RECT clear_rect;
++    if (resolve_clear_needed) {
++      // Assuming the rectangle is already clamped by the setup function from the
++      // common render target cache.
++      clear_rect.left = LONG(resolve_clear_rectangle->x_pixels * dest_scale_x);
++      clear_rect.top = LONG(resolve_clear_rectangle->y_pixels * dest_scale_y);
++      clear_rect.right =
++          LONG((resolve_clear_rectangle->x_pixels + resolve_clear_rectangle->width_pixels) *
++               dest_scale_x);
++      clear_rect.bottom =
++          LONG((resolve_clear_rectangle->y_pixels + resolve_clear_rectangle->height_pixels) *
++               dest_scale_y);
++    }
+ 
+     // Late barrier in case there was cross-copying that prevented merging of
+     // barriers.
+@@ -4301,6 +4625,51 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
      command_processor_.PushTransitionBarrier(
          dest_d3d12_rt.resource(), dest_d3d12_rt.SetResourceState(dest_state), dest_state);
  
@@ -3677,12 +4463,12 @@ index 4dd8332..5f9b42e 100644
 +        }
 +        for (uint32_t r = 0; r < count; ++r) {
 +          const auto& rect = rectangles[r];
-+          host_rectangles[r].left = LONG(rect.x_pixels * draw_resolution_scale_x());
-+          host_rectangles[r].top = LONG(rect.y_pixels * draw_resolution_scale_y());
++          host_rectangles[r].left = LONG(rect.x_pixels * dest_scale_x);
++          host_rectangles[r].top = LONG(rect.y_pixels * dest_scale_y);
 +          host_rectangles[r].right =
-+              LONG((rect.x_pixels + rect.width_pixels) * draw_resolution_scale_x());
++              LONG((rect.x_pixels + rect.width_pixels) * dest_scale_x);
 +          host_rectangles[r].bottom =
-+              LONG((rect.y_pixels + rect.height_pixels) * draw_resolution_scale_y());
++              LONG((rect.y_pixels + rect.height_pixels) * dest_scale_y);
 +          if (uint64_t order = fm4::frame_metrics::NextRTOrderEvent()) {
 +            REXGPU_INFO("FM4 RT order: n={} frame={} op=color_to_depth_clear src={} dst={} "
 +                        "tiles=[{},{}) rect={},{},{},{} depth={} stencil=0",
@@ -3698,7 +4484,25 @@ index 4dd8332..5f9b42e 100644
      if (!current_transfers.empty()) {
        are_current_command_list_render_targets_valid_ = false;
        if (dest_rt_key.is_depth) {
-@@ -4408,6 +4580,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4330,6 +4699,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+       TransferShaderKey new_transfer_shader_key;
+       new_transfer_shader_key.dest_msaa_samples = dest_rt_key.msaa_samples;
+       new_transfer_shader_key.dest_resource_format = dest_rt_key.resource_format;
++      new_transfer_shader_key.dest_unscaled = dest_rt_key.unscaled;
+       uint32_t stencil_clear_rectangle_count = 0;
+       for (uint32_t j = 0; j <= uint32_t(need_stencil_bit_draws); ++j) {
+         // j == 0 - color or depth.
+@@ -4362,6 +4732,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+           RenderTargetKey source_rt_key = source_d3d12_rt.key();
+           new_transfer_shader_key.source_msaa_samples = source_rt_key.msaa_samples;
+           new_transfer_shader_key.source_resource_format = source_rt_key.resource_format;
++          new_transfer_shader_key.source_unscaled = source_rt_key.unscaled;
++          new_transfer_shader_key.host_depth_source_unscaled =
++              host_depth_source_d3d12_rt && host_depth_source_d3d12_rt->key().unscaled;
+           bool host_depth_source_is_copy = host_depth_source_d3d12_rt == &dest_d3d12_rt;
+           new_transfer_shader_key.host_depth_source_is_copy = host_depth_source_is_copy;
+           // The host depth copy buffer has only raw samples.
+@@ -4408,6 +4781,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
          D3D12_RECT* stencil_clear_rect_write_ptr = command_list.ClearDepthStencilViewAllocatedRects(
              dest_d3d12_rt.descriptor_draw().GetHandle(), D3D12_CLEAR_FLAG_STENCIL, 0.0f, 0,
              stencil_clear_rectangle_count);
@@ -3709,7 +4513,7 @@ index 4dd8332..5f9b42e 100644
          assert_not_null(stencil_clear_rect_write_ptr);
          for (const Transfer& transfer : current_transfers) {
            Transfer::Rectangle transfer_stencil_clear_rectangles[Transfer::kMaxRectanglesWithCutout];
-@@ -4417,6 +4593,13 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4417,16 +4794,23 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
            for (uint32_t j = 0; j < transfer_stencil_clear_rectangle_count; ++j) {
              const Transfer::Rectangle& stencil_clear_rectangle =
                  transfer_stencil_clear_rectangles[j];
@@ -3721,9 +4525,23 @@ index 4dd8332..5f9b42e 100644
 +                          stencil_clear_rectangle.width_pixels, stencil_clear_rectangle.height_pixels);
 +            }
              stencil_clear_rect_write_ptr->left =
-                 LONG(stencil_clear_rectangle.x_pixels * draw_resolution_scale_x());
+-                LONG(stencil_clear_rectangle.x_pixels * draw_resolution_scale_x());
++                LONG(stencil_clear_rectangle.x_pixels * dest_scale_x);
              stencil_clear_rect_write_ptr->top =
-@@ -4526,6 +4709,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+-                LONG(stencil_clear_rectangle.y_pixels * draw_resolution_scale_y());
++                LONG(stencil_clear_rectangle.y_pixels * dest_scale_y);
+             stencil_clear_rect_write_ptr->right =
+                 LONG((stencil_clear_rectangle.x_pixels + stencil_clear_rectangle.width_pixels) *
+-                     draw_resolution_scale_x());
++                     dest_scale_x);
+             stencil_clear_rect_write_ptr->bottom =
+                 LONG((stencil_clear_rectangle.y_pixels + stencil_clear_rectangle.height_pixels) *
+-                     draw_resolution_scale_y());
++                     dest_scale_y);
+             ++stencil_clear_rect_write_ptr;
+           }
+         }
+@@ -4526,6 +4910,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
          if (!transfer_rectangle_write_ptr) {
            continue;
          }
@@ -3731,19 +4549,19 @@ index 4dd8332..5f9b42e 100644
          for (auto it_merged = it_merged_first; it_merged <= it_merged_last; ++it_merged) {
            Transfer::Rectangle transfer_invocation_rectangles[Transfer::kMaxRectanglesWithCutout];
            uint32_t transfer_invocation_rectangle_count = it_merged->transfer.GetRectangles(
-@@ -4534,6 +4718,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4534,6 +4919,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
            assert_not_zero(transfer_invocation_rectangle_count);
            for (uint32_t j = 0; j < transfer_invocation_rectangle_count; ++j) {
              const Transfer::Rectangle& transfer_rectangle = transfer_invocation_rectangles[j];
 +            if (transfer_metrics) {
 +              transfer_host_pixels += uint64_t(transfer_rectangle.width_pixels) *
-+                                      transfer_rectangle.height_pixels * draw_resolution_scale_x() *
-+                                      draw_resolution_scale_y();
++                                      transfer_rectangle.height_pixels * dest_scale_x *
++                                      dest_scale_y;
 +            }
              float transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
              float transfer_rectangle_y0 = 1.0f - transfer_rectangle.y_pixels * pixels_to_ndc_y;
              float transfer_rectangle_x1 =
-@@ -4730,6 +4919,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4730,6 +5120,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
  
          // Draw the transfer rectangles.
          command_processor_.SubmitBarriers();
@@ -3754,10 +4572,32 @@ index 4dd8332..5f9b42e 100644
          for (uint32_t j = 0; j <= uint32_t(is_stencil_bit) * 7; ++j) {
            if (is_stencil_bit) {
              uint32_t transfer_stencil_bit = uint32_t(1) << j;
-@@ -4739,7 +4932,37 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4739,7 +5133,59 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                  sizeof(transfer_stencil_bit) / sizeof(uint32_t), &transfer_stencil_bit, 0);
            }
            command_processor_.SetExternalPipeline(transfer_pipelines[j]);
++          if (fm4_trace_transfers) {
++            for (auto traced = it_merged_first;; ++traced) {
++              const Transfer& transfer = traced->transfer;
++              Transfer::Rectangle rectangles[Transfer::kMaxRectanglesWithCutout];
++              uint32_t count = transfer.GetRectangles(
++                  dest_rt_key.base_tiles, dest_pitch_tiles, dest_rt_key.msaa_samples,
++                  dest_is_64bpp, rectangles, resolve_clear_rectangle);
++              uint64_t samples = 0;
++              for (uint32_t r = 0; r < count; ++r) {
++                samples += uint64_t(rectangles[r].width_pixels) * rectangles[r].height_pixels;
++              }
++              samples *= uint64_t(draw_resolution_scale_x()) * draw_resolution_scale_y() *
++                         (uint32_t(1) << uint32_t(dest_rt_key.msaa_samples));
++              fm4_trace_transfers->Add(transfer.source->key(), dest_rt_key,
++                                      uint32_t(traced->shader_key.mode), samples,
++                                      transfer.start_tiles, transfer.end_tiles,
++                                      transfer.host_depth_source ? transfer.host_depth_source->key()
++                                                                 : dest_rt_key,
++                                      transfer.host_depth_source != nullptr);
++              if (traced == it_merged_last) break;
++            }
++          }
 +          if (uint64_t order = fm4::frame_metrics::NextRTOrderEvent()) {
 +            for (auto traced = it_merged_first;; ++traced) {
 +              const Transfer& transfer = traced->transfer;
@@ -3792,7 +4632,7 @@ index 4dd8332..5f9b42e 100644
          }
        }
      }
-@@ -4768,6 +4991,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4768,6 +5214,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                                                D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
                                                depth_host_clear_value, UINT(clear_value) & 0xFF, 1,
                                                &clear_rect);
@@ -3810,7 +4650,7 @@ index 4dd8332..5f9b42e 100644
        } else {
          float color_clear_value[4] = {};
          bool clear_via_drawing = false;
-@@ -4869,6 +5103,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4869,6 +5326,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                xenos::ColorRenderTargetFormat::k_32_32_FLOAT)][size_t(dest_rt_key.msaa_samples)]);
            command_processor_.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
            command_list.D3DDrawInstanced(3, 1, 0, 0);
@@ -3820,7 +4660,7 @@ index 4dd8332..5f9b42e 100644
          } else {
            command_processor_.SubmitBarriers();
            command_list.D3DClearRenderTargetView(
-@@ -4876,6 +5113,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4876,6 +5336,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                    ? dest_d3d12_rt.descriptor_load_separate().GetHandle()
                    : dest_d3d12_rt.descriptor_draw().GetHandle(),
                color_clear_value, 1, &clear_rect);
@@ -3838,7 +4678,72 @@ index 4dd8332..5f9b42e 100644
          }
        }
      }
-@@ -5804,6 +6052,9 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+@@ -5266,8 +5737,8 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
+   // fits in it, while 80x16 doesn't.
+   a.OpDclThreadGroup(40, 16, 1);
+ 
+-  uint32_t draw_resolution_scale_x = this->draw_resolution_scale_x();
+-  uint32_t draw_resolution_scale_y = this->draw_resolution_scale_y();
++  uint32_t draw_resolution_scale_x = key.dest_unscaled ? 1 : this->draw_resolution_scale_x();
++  uint32_t draw_resolution_scale_y = key.dest_unscaled ? 1 : this->draw_resolution_scale_y();
+ 
+   // For now, as the exact addressing in 64bpp render targets relatively to
+   // 32bpp is unknown, treating 64bpp tiles as storing 40x16 samples rather than
+@@ -5483,6 +5954,17 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
+     // r0.z = sample offset in the EDRAM
+     // r0.w = sample index within the source pixel if stencil is needed
+     // r1 = source texel value
++    if (key.source_unscaled != key.dest_unscaled) {
++      a.OpUDiv(dxbc::Dest::R(0, 0b0011), dxbc::Dest::Null(), dxbc::Src::R(0),
++               dxbc::Src::LU(draw_resolution_scale_x, draw_resolution_scale_y,
++                             draw_resolution_scale_x, draw_resolution_scale_y));
++      uint32_t source_scale_x = key.source_unscaled ? 1 : this->draw_resolution_scale_x();
++      uint32_t source_scale_y = key.source_unscaled ? 1 : this->draw_resolution_scale_y();
++      a.OpUMAd(dxbc::Dest::R(0, 0b0011), dxbc::Src::R(0),
++               dxbc::Src::LU(source_scale_x, source_scale_y, source_scale_x, source_scale_y),
++               dxbc::Src::LU(source_scale_x / 2, source_scale_y / 2,
++                             source_scale_x / 2, source_scale_y / 2));
++    }
+     a.OpLdMS(dxbc::Dest::R(1, (1 << source_component_count) - 1), source_address_src, 0b0011,
+              dxbc::Src::T(0, 0), dxbc::Src::R(0, dxbc::Src::kWWWW));
+     if (key.is_depth) {
+@@ -5510,6 +5992,17 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
+     // r0.z = sample offset in the EDRAM
+     // r0.w = LOD for the texture load (zero)
+     // r1 = source texel value
++    if (key.source_unscaled != key.dest_unscaled) {
++      a.OpUDiv(dxbc::Dest::R(0, 0b0011), dxbc::Dest::Null(), dxbc::Src::R(0),
++               dxbc::Src::LU(draw_resolution_scale_x, draw_resolution_scale_y,
++                             draw_resolution_scale_x, draw_resolution_scale_y));
++      uint32_t source_scale_x = key.source_unscaled ? 1 : this->draw_resolution_scale_x();
++      uint32_t source_scale_y = key.source_unscaled ? 1 : this->draw_resolution_scale_y();
++      a.OpUMAd(dxbc::Dest::R(0, 0b0011), dxbc::Src::R(0),
++               dxbc::Src::LU(source_scale_x, source_scale_y, source_scale_x, source_scale_y),
++               dxbc::Src::LU(source_scale_x / 2, source_scale_y / 2,
++                             source_scale_x / 2, source_scale_y / 2));
++    }
+     a.OpLd(dxbc::Dest::R(1, (1 << source_component_count) - 1), source_address_src, 0b1011,
+            dxbc::Src::T(0, 0));
+     if (key.is_depth) {
+@@ -5756,6 +6249,7 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
+     dump_pipeline_key.msaa_samples = render_target->key().msaa_samples;
+     dump_pipeline_key.resource_format = render_target->key().resource_format;
+     dump_pipeline_key.is_depth = render_target->key().is_depth;
++    dump_pipeline_key.source_unscaled = render_target->key().unscaled;
+     if (!GetOrCreateDumpPipeline(dump_pipeline_key)) {
+       return false;
+     }
+@@ -5774,7 +6268,8 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
+ }
+ 
+ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used,
+-                                               uint32_t dump_rows, uint32_t dump_pitch) {
++                                              uint32_t dump_rows, uint32_t dump_pitch,
++                                              bool unscaled) {
+   assert_true(GetPath() == Path::kHostRenderTargets);
+ 
+   GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
+@@ -5804,6 +6299,9 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
          d3d12_rt.resource(),
          d3d12_rt.SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -3848,6 +4753,28 @@ index 4dd8332..5f9b42e 100644
      if (d3d12_rt.temporary_sort_index() == UINT32_MAX) {
        d3d12_rt.SetTemporarySortIndex(rt_sort_index++);
      }
+@@ -5822,6 +6320,8 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+     pipeline_key.msaa_samples = rt_key.msaa_samples;
+     pipeline_key.resource_format = rt_key.resource_format;
+     pipeline_key.is_depth = rt_key.is_depth;
++    pipeline_key.source_unscaled = rt_key.unscaled;
++    pipeline_key.dest_unscaled = unscaled;
+     dump_invocations_.emplace_back(rectangle, pipeline_key);
+   }
+   // 32bpp and 64bpp.
+@@ -5980,9 +6480,10 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+       command_processor_.SubmitBarriers();
+       // Processing 40 x 16 x scale samples per dispatch (a 32bpp tile in two
+       // dispatches at 1x1 scale, 64bpp in one dispatch).
+-      command_list.D3DDispatch((dispatch.width_tiles * draw_resolution_scale_x())
++      command_list.D3DDispatch((dispatch.width_tiles * (unscaled ? 1 : draw_resolution_scale_x()))
+                                    << uint32_t(!format_is_64bpp),
+-                               dispatch.height_tiles * draw_resolution_scale_y(), 1);
++                               dispatch.height_tiles * (unscaled ? 1 : draw_resolution_scale_y()),
++                               1);
+     }
+     MarkEdramBufferModified();
+   }
 diff --git a/src/graphics/d3d12/shared_memory.cpp b/src/graphics/d3d12/shared_memory.cpp
 index 74a3e45..a81fc82 100644
 --- a/src/graphics/d3d12/shared_memory.cpp
@@ -3880,7 +4807,7 @@ index 74a3e45..a81fc82 100644
                                         upload_buffer, UINT64(upload_buffer_offset),
                                         UINT64(upload_buffer_size));
 diff --git a/src/graphics/d3d12/texture_cache.cpp b/src/graphics/d3d12/texture_cache.cpp
-index 2be0e8e..4ee41d8 100644
+index 2be0e8e..f580517 100644
 --- a/src/graphics/d3d12/texture_cache.cpp
 +++ b/src/graphics/d3d12/texture_cache.cpp
 @@ -22,12 +22,17 @@
@@ -4007,7 +4934,187 @@ index 2be0e8e..4ee41d8 100644
  
    // TODO(Triang3l): Disable filtering for texture formats not supporting it.
    xenos::AnisoFilter aniso_filter = binding.aniso_filter == xenos::AnisoFilter::kUseFetchConst
-@@ -1400,6 +1435,18 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
+@@ -1111,6 +1146,47 @@ bool D3D12TextureCache::ClampDrawResolutionScaleToMaxSupported(
+   return !was_clamped;
+ }
+ 
++bool D3D12TextureCache::PrepareScaledResolveNativePages(uint32_t start, uint32_t length,
++                                                       uint32_t pixel_size_log2) {
++  if (!length) {
++    return true;
++  }
++  if (pixel_size_log2 > 4 || start >= SharedMemory::kBufferSize ||
++      length > SharedMemory::kBufferSize - start) {
++    return false;
++  }
++  uint32_t end = rex::align(start + length, uint32_t(4096));
++  auto& native_memory = static_cast<D3D12SharedMemory&>(shared_memory());
++  for (uint32_t page = start & ~uint32_t(4095); page < end;) {
++    if (IsRangeScaledResolved(page, 4096)) {
++      page += 4096;
++      continue;
++    }
++    uint32_t first = page;
++    do { page += 4096; } while (page < end && !IsRangeScaledResolved(page, 4096));
++    uint32_t bytes = page - first;
++    if (!EnsureScaledResolveMemoryCommitted(first, bytes) ||
++        !native_memory.RequestRange(first, bytes, true) ||
++        !MakeScaledResolveRangeCurrent(first, bytes, 4)) {
++      return false;
++    }
++    native_memory.UseForReading();
++    TransitionCurrentScaledResolveRange(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    command_processor_.PushUAVBarrier(GetCurrentScaledResolveBufferResource());
++    command_processor_.SubmitBarriers();
++    uint64_t offset = uint64_t(first) * draw_resolution_scale_x() * draw_resolution_scale_y() -
++                      (uint64_t(GetCurrentScaledResolveBufferIndexPublic()) << 30);
++    if (!native_mip_uploader_.Record(command_processor_, native_memory.GetBuffer(),
++                                     GetCurrentScaledResolveBufferResource(), first, offset, bytes,
++                                     draw_resolution_scale_x(), draw_resolution_scale_y(),
++                                     pixel_size_log2)) {
++      return false;
++    }
++    command_processor_.PushUAVBarrier(GetCurrentScaledResolveBufferResource());
++  }
++  return true;
++}
++
+ bool D3D12TextureCache::EnsureScaledResolveMemoryCommitted(uint32_t start_unscaled,
+                                                            uint32_t length_unscaled,
+                                                            uint32_t length_scaled_alignment_log2) {
+@@ -1365,6 +1441,131 @@ void D3D12TextureCache::CreateCurrentScaledResolveRangeUintPow2UAV(
+           element_size_bytes_pow2);
+ }
+ 
++bool D3D12TextureCache::CacheHostResolve(const draw_util::ResolveInfo& resolve_info,
++                                        ID3D12Resource* source, const D3D12_BOX& source_box) {
++  const auto& dest = resolve_info.copy_dest_info;
++  const auto& coordinates = resolve_info.copy_dest_coordinate_info;
++  uint32_t width = resolve_info.coordinate_info.width_div_8 * 8;
++  uint32_t height = resolve_info.height_div_8 * 8;
++  uint32_t pitch = coordinates.pitch_aligned_div_32;
++  // Keep the first version bit-preserving. Gamma and 7e3 require conversion,
++  // and sub-page / partial destinations cannot describe a complete cache key.
++  if (!source || resolve_info.IsCopyingDepth() ||
++      resolve_info.color_edram_info.msaa_samples != xenos::MsaaSamples::k1X ||
++      !xenos::IsSingleCopySampleSelected(coordinates.copy_sample_select) ||
++      !resolve_info.copy_dest_base || (resolve_info.copy_dest_base & 4095) ||
++      resolve_info.copy_dest_extent_start != resolve_info.copy_dest_base ||
++      !resolve_info.copy_dest_extent_length || coordinates.offset_x_div_8 ||
++      coordinates.offset_y_div_8 || dest.copy_dest_array || dest.copy_dest_slice ||
++      dest.copy_dest_swap || dest.copy_dest_exp_bias ||
++      dest.copy_dest_number != xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction ||
++      uint32_t(dest.copy_dest_endian) > uint32_t(xenos::Endian::k16in32) ||
++      width < 32 || height < 32 || width > xenos::kTexture2DCubeMaxWidthHeight ||
++      height > xenos::kTexture2DCubeMaxWidthHeight || !pitch || pitch > 511 ||
++      pitch * 32 < width || coordinates.height_aligned_div_32 * 32 < height) {
++    return false;
++  }
++  DXGI_FORMAT source_format;
++  switch (dest.copy_dest_format) {
++    case xenos::ColorFormat::k_8_8_8_8:
++      if (xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format) !=
++          xenos::ColorRenderTargetFormat::k_8_8_8_8) {
++        return false;
++      }
++      source_format = DXGI_FORMAT_R8G8B8A8_UNORM;
++      break;
++    case xenos::ColorFormat::k_2_10_10_10:
++      if (xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format) !=
++              xenos::ColorRenderTargetFormat::k_2_10_10_10 &&
++          xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format) !=
++              xenos::ColorRenderTargetFormat::k_2_10_10_10_AS_10_10_10_10) {
++        return false;
++      }
++      source_format = DXGI_FORMAT_R10G10B10A2_UNORM;
++      break;
++    default:
++      return false;
++  }
++  uint32_t scale_x = draw_resolution_scale_x();
++  uint32_t scale_y = draw_resolution_scale_y();
++  D3D12_RESOURCE_DESC source_desc = source->GetDesc();
++  if (source_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
++      source_desc.Format != source_format || source_desc.SampleDesc.Count != 1 ||
++      source_box.front || source_box.back != 1 || source_box.right > source_desc.Width ||
++      source_box.bottom > source_desc.Height ||
++      source_box.right - source_box.left != width * scale_x ||
++      source_box.bottom - source_box.top != height * scale_y) {
++    return false;
++  }
++
++  TextureKey key;
++  key.base_page = resolve_info.copy_dest_base >> 12;
++  key.dimension = xenos::DataDimension::k2DOrStacked;
++  key.width_minus_1 = width - 1;
++  key.height_minus_1 = height - 1;
++  key.pitch = pitch;
++  key.tiled = 1;
++  key.format = xenos::TextureFormat(dest.copy_dest_format);
++  key.endianness = xenos::Endian(dest.copy_dest_endian);
++  key.scaled_resolve = IsDrawResolutionScaled();
++  key.is_valid = 1;
++  if (resolve_info.copy_dest_base >= SharedMemory::kBufferSize ||
++      key.GetGuestLayout().base.level_data_extent_bytes >
++          SharedMemory::kBufferSize - resolve_info.copy_dest_base) {
++    return false;
++  }
++  // With both dimensions >= 32, packing starts below level 0. Seed both
++  // single-level keys so either fetch packed_mips flag can reuse this resolve.
++  // Each resource is budgeted and retired by the normal texture cache LRU.
++  D3D12Texture* textures[2];
++  for (uint32_t packed = 0; packed < 2; ++packed) {
++    key.packed_mips = packed;
++    auto* texture = static_cast<D3D12Texture*>(FindOrCreateTexture(key));
++    if (!texture || texture->key() != key || texture->override_index_ >= 0) {
++      return false;
++    }
++    textures[packed] = texture;
++  }
++
++  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
++  MarkRangeAsResolved(resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length);
++  for (D3D12Texture* texture : textures) {
++    command_processor_.PushTransitionBarrier(
++        texture->resource(), texture->SetResourceState(D3D12_RESOURCE_STATE_COPY_DEST),
++        D3D12_RESOURCE_STATE_COPY_DEST);
++  }
++  command_processor_.SubmitBarriers();
++  D3D12_TEXTURE_COPY_LOCATION source_location = {};
++  source_location.pResource = source;
++  source_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++  // Match the fast scaled resolve's clamp of local coordinates to scale / 2
++  // on the left and top edges. Copy the interior, then the repeated strips and
++  // corner, always reading the immutable source target rather than the copy.
++  uint32_t fill_x = resolve_info.color_edram_info.fill_half_pixel_offset ? scale_x / 2 : 0;
++  uint32_t fill_y = resolve_info.color_edram_info.fill_half_pixel_offset ? scale_y / 2 : 0;
++  for (D3D12Texture* texture : textures) {
++    D3D12_TEXTURE_COPY_LOCATION target_location = {};
++    target_location.pResource = texture->resource();
++    target_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    for (uint32_t y = 0; y <= fill_y; ++y) {
++      for (uint32_t x = 0; x <= fill_x; ++x) {
++        uint32_t copy_width = x == fill_x ? width * scale_x - fill_x : 1;
++        uint32_t copy_height = y == fill_y ? height * scale_y - fill_y : 1;
++        D3D12_BOX box{source_box.left + fill_x, source_box.top + fill_y, 0,
++                      source_box.left + fill_x + copy_width,
++                      source_box.top + fill_y + copy_height, 1};
++        command_processor_.GetDeferredCommandList().D3DCopyTextureRegion(
++            &target_location, x, y, 0, &source_location, &box);
++      }
++    }
++    // A later invalidation must not reuse fingerprints for the old contents.
++    texture->content_stamps_valid_ = 0;
++    texture->MarkAsUsed();
++    texture->MakeUpToDateAndWatch(global_lock);
++  }
++  return true;
++}
++
+ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out,
+                                                       xenos::TextureFormat& format_out,
+                                                       uint32_t* width_unscaled_out,
+@@ -1400,6 +1601,18 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
    // Only texture->key, not the result of BindingInfoFromFetchConstant, contains
    // whether the texture is scaled.
    key = texture->key();
@@ -4026,7 +5133,7 @@ index 2be0e8e..4ee41d8 100644
    if (width_unscaled_out) {
      *width_unscaled_out = key.GetWidth();
    }
-@@ -1424,6 +1471,7 @@ D3D12TextureCache::D3D12Texture::D3D12Texture(D3D12TextureCache& texture_cache,
+@@ -1424,6 +1637,7 @@ D3D12TextureCache::D3D12Texture::D3D12Texture(D3D12TextureCache& texture_cache,
  
  D3D12TextureCache::D3D12Texture::~D3D12Texture() {
    auto& d3d12_texture_cache = static_cast<D3D12TextureCache&>(texture_cache());
@@ -4034,7 +5141,7 @@ index 2be0e8e..4ee41d8 100644
    for (const auto& descriptor_pair : srv_descriptors_) {
      d3d12_texture_cache.ReleaseTextureDescriptor(descriptor_pair.second);
    }
-@@ -1562,6 +1610,8 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1562,6 +1776,8 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
    D3D12Texture& d3d12_texture = static_cast<D3D12Texture&>(texture);
    TextureKey texture_key = d3d12_texture.key();
  
@@ -4043,7 +5150,7 @@ index 2be0e8e..4ee41d8 100644
    DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
    ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
  
-@@ -1622,6 +1672,42 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1622,6 +1838,42 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
      loop_level_last = level_stored_last;
    }
  
@@ -4086,7 +5193,7 @@ index 2be0e8e..4ee41d8 100644
    // Get the host layout and the buffer.
    bool host_block_compressed = host_formats_[uint32_t(guest_format)].is_block_compressed &&
                                 !IsDecompressionNeeded(guest_format, width, height);
-@@ -1650,6 +1736,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1650,6 +1902,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
    // implicit assumptions about D3D12_TEXTURE_DATA_PITCH_ALIGNMENT.
    DXGI_FORMAT host_copy_format = GetDXGIResourceFormat(guest_format, width, height);
    for (uint32_t loop_level = loop_level_first; loop_level <= loop_level_last; ++loop_level) {
@@ -4096,7 +5203,7 @@ index 2be0e8e..4ee41d8 100644
      bool is_base = loop_level == 0;
      uint32_t level = (level_packed == 0) ? 0 : loop_level;
      D3D12_PLACED_SUBRESOURCE_FOOTPRINT& level_host_slice_layout =
-@@ -1767,6 +1856,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1767,6 +2022,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
    bool scaled_mips_source_set_up = false;
    uint32_t guest_x_blocks_per_group_log2 = load_shader_info.GetGuestXBlocksPerGroupLog2();
    for (uint32_t loop_level = loop_level_first; loop_level <= loop_level_last; ++loop_level) {
@@ -4106,7 +5213,7 @@ index 2be0e8e..4ee41d8 100644
      bool is_base = loop_level == 0;
      uint32_t level = (level_packed == 0) ? 0 : loop_level;
  
-@@ -1777,6 +1869,80 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1777,6 +2035,80 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
      if (texture_resolution_scaled && (is_base || !scaled_mips_source_set_up)) {
        uint32_t guest_size_unscaled =
            is_base ? d3d12_texture.GetGuestBaseSize() : d3d12_texture.GetGuestMipsSize();
@@ -4187,7 +5294,7 @@ index 2be0e8e..4ee41d8 100644
        if (!MakeScaledResolveRangeCurrent(guest_address, guest_size_unscaled,
                                           load_shader_info.source_bpe_log2)) {
          command_processor_.ReleaseScratchGPUBuffer(copy_buffer, copy_buffer_state);
-@@ -1896,6 +2062,10 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1896,6 +2228,10 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
    location_dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
    for (uint32_t level = level_first; level <= level_last; ++level) {
      uint32_t guest_level = std::min(level, level_packed);
@@ -4198,7 +5305,7 @@ index 2be0e8e..4ee41d8 100644
      location_source.PlacedFootprint =
          level ? host_slice_layouts_mips[guest_level] : host_slice_layout_base;
      location_dest.SubresourceIndex = level;
-@@ -1932,6 +2102,13 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+@@ -1932,6 +2268,13 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
  
    command_processor_.ReleaseScratchGPUBuffer(copy_buffer, copy_buffer_state);
  
@@ -4212,7 +5319,7 @@ index 2be0e8e..4ee41d8 100644
    return true;
  }
  
-@@ -2033,6 +2210,205 @@ ID3D12Resource* D3D12TextureCache::D3D12Texture::GetOrCreate3DAs2DResource(
+@@ -2033,6 +2376,205 @@ ID3D12Resource* D3D12TextureCache::D3D12Texture::GetOrCreate3DAs2DResource(
    return texture_3d_as_2d_->resource();
  }
  
@@ -4418,7 +5525,7 @@ index 2be0e8e..4ee41d8 100644
  uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
                                                            xenos::DataDimension dimension,
                                                            bool is_signed, uint32_t host_swizzle) {
-@@ -2041,6 +2417,7 @@ uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
+@@ -2041,6 +2583,7 @@ uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
    descriptor_key.is_signed = uint32_t(is_signed);
    descriptor_key.host_swizzle = host_swizzle;
    descriptor_key.dimension = uint32_t(dimension);
@@ -4426,7 +5533,7 @@ index 2be0e8e..4ee41d8 100644
  
    // Try to find an existing descriptor.
    uint32_t existing_descriptor_index = texture.GetSRVDescriptorIndex(descriptor_key);
-@@ -2074,8 +2451,12 @@ uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
+@@ -2074,8 +2617,12 @@ uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
      return UINT32_MAX;
    }
  
@@ -4456,13 +5563,17 @@ index 243a4f9..7c5de51 100644
  
  void GraphicsSystem::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index 8881530..a442575 100644
+index 8881530..6f6ded4 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
-@@ -31,6 +31,16 @@
+@@ -31,6 +31,20 @@
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
  
++REXCVAR_DEFINE_BOOL(host_render_targets_unscaled_depth_only, false, "GPU",
++                    "Use 1x host depth targets for FM4 mode 5, 4x MSAA shadow passes")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
 +REXCVAR_DEFINE_BOOL(host_render_targets_edram_wrap, false, "GPU",
 +                    "With host render targets, let a render target's estimated EDRAM range wrap "
 +                    "past the end of the EDRAM onto other render targets");
@@ -4476,7 +5587,7 @@ index 8881530..a442575 100644
  REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend, true, "GPU",
                      "Execute unclipped draw VS on CPU for PSI render backend");
  
-@@ -411,135 +421,163 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -411,137 +425,178 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                                 reg::RB_DEPTHCONTROL normalized_depth_control,
                                 uint32_t normalized_color_mask, const Shader& vertex_shader) {
    const RegisterFile& regs = register_file();
@@ -4573,6 +5684,15 @@ index 8881530..a442575 100644
 -      // With pixel shader interlock, always the same addressing disregarding
 -      // the format.
 -      resource_formats[0] = interlock_barrier_only ? 0 : uint32_t(rb_depth_info.depth_format);
++    // Normalize before pitch, height, ownership ranges and resource keys are
++    // calculated. Matching pixel layouts then share the same 1x owner even
++    // when the guest changes MSAA. EDRAM base and format remain significant.
++    if (IsHostRenderTargetMsaaCollapsed()) {
++      msaa_samples = xenos::MsaaSamples::k1X;
+     }
+-    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+-      if (!(normalized_color_mask & (uint32_t(0b1111) << (4 * i)))) {
+-        continue;
 +    uint32_t msaa_samples_x_log2 = uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
 +    uint32_t pitch_pixels = rb_surface_info.surface_pitch;
 +    // surface_pitch 0 should be handled in disabling rasterization (hopefully
@@ -4586,16 +5706,15 @@ index 8881530..a442575 100644
 +          "by the guest",
 +          pitch_pixels, xenos::kTexture2DCubeMaxWidthHeight);
 +      return false;
-     }
--    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
--      if (!(normalized_color_mask & (uint32_t(0b1111) << (4 * i)))) {
--        continue;
++    }
 +    pitch_tiles_at_32bpp =
 +        ((pitch_pixels << msaa_samples_x_log2) + (xenos::kEdramTileWidthSamples - 1)) /
 +        xenos::kEdramTileWidthSamples;
 +    if (!interlock_barrier_only) {
 +      uint32_t pitch_pixels_tile_aligned_scaled =
-+          pitch_tiles_at_32bpp * (xenos::kEdramTileWidthSamples >> msaa_samples_x_log2) *
++          pitch_tiles_at_32bpp *
++          (xenos::kEdramTileWidthSamples >>
++           (IsHostRenderTargetSampleGrid() ? 0 : msaa_samples_x_log2)) *
 +          draw_resolution_scale_x();
 +      uint32_t max_render_target_width = GetMaxRenderTargetWidth();
 +      if (pitch_pixels_tile_aligned_scaled > max_render_target_width) {
@@ -4676,10 +5795,10 @@ index 8881530..a442575 100644
 -      resource_formats[rt_bit_index] = uint32_t(color_resource_format);
      }
 -  }
--
+ 
 -  uint32_t rts_remaining;
 -  uint32_t rt_index;
- 
+-
 -  // Eliminate other bound render targets if their EDRAM base conflicts with
 -  // another render target - it's an error in most host implementations to bind
 -  // the same render target into multiple slots, also the behavior would be
@@ -4756,8 +5875,46 @@ index 8881530..a442575 100644
 +    }
    }
  
++  bool unscaled_depth_only =
++      !interlock_barrier_only && depth_and_color_rts_used_bits == 1 && !normalized_color_mask &&
++      uint32_t(regs.Get<reg::RB_MODECONTROL>().edram_mode) == 5 &&
++      UseUnscaledDepthOnly(regs.Get<reg::RB_SURFACE_INFO>().surface_pitch, msaa_samples);
++
    // Clear ownership transfers before adding any.
-@@ -668,6 +706,19 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+   if (!interlock_barrier_only) {
+     for (size_t i = 0; i < rex::countof(last_update_transfers_); ++i) {
+@@ -561,7 +616,8 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+         }
+         RenderTargetKey rt_key = render_target->key();
+         if (rt_key.pitch_tiles_at_32bpp != pitch_tiles_at_32bpp ||
+-            rt_key.msaa_samples != msaa_samples) {
++            rt_key.msaa_samples != GetHostRenderTargetMsaaSamples(msaa_samples) ||
++            rt_key.unscaled != unscaled_depth_only) {
+           are_accumulated_render_targets_valid_ = false;
+           break;
+         }
+@@ -577,7 +633,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+   // Estimate height used by render targets (for color for writes, for depth /
+   // stencil for both reads and writes) from various sources.
+   uint32_t height_used =
+-      std::min(GetRenderTargetHeight(pitch_tiles_at_32bpp, msaa_samples),
++      std::min(GetRenderTargetHeight(pitch_tiles_at_32bpp, msaa_samples, unscaled_depth_only),
+                draw_extent_estimator_.EstimateMaxY(
+                    interlock_barrier_only
+                        ? REXCVAR_GET(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend)
+@@ -646,9 +702,10 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+     RenderTargetKey& rt_key = rt_keys[rt_bit_index];
+     rt_key.base_tiles = rt_base;
+     rt_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
+-    rt_key.msaa_samples = msaa_samples;
++    rt_key.msaa_samples = GetHostRenderTargetMsaaSamples(msaa_samples);
+     rt_key.is_depth = rt_bit_index == 0;
+     rt_key.resource_format = resource_formats[rt_bit_index];
++    rt_key.unscaled = unscaled_depth_only;
+     if (!interlock_barrier_only) {
+       RenderTarget* render_target = GetOrCreateRenderTarget(rt_key);
+       if (!render_target) {
+@@ -668,6 +725,19 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                                         rt_base);
    }
  
@@ -4777,7 +5934,7 @@ index 8881530..a442575 100644
    if (interlock_barrier_only) {
      // Because a full pixel shader interlock barrier may clear the ownership map
      // (since it flushes all previous writes, and there's no need for another
-@@ -693,9 +744,103 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -693,9 +763,103 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
@@ -4881,8 +6038,223 @@ index 8881530..a442575 100644
      ChangeOwnership(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i],
                      interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index]);
    }
+@@ -738,7 +902,8 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+       } else {
+         RenderTargetKey accumulated_rt_key = accumulated_rt->key();
+         if (accumulated_rt_key.pitch_tiles_at_32bpp != pitch_tiles_at_32bpp ||
+-            accumulated_rt_key.msaa_samples != msaa_samples) {
++            accumulated_rt_key.msaa_samples != GetHostRenderTargetMsaaSamples(msaa_samples) ||
++            accumulated_rt_key.unscaled != unscaled_depth_only) {
+           // The previously bound render target is incompatible with the
+           // current surface info.
+           are_accumulated_render_targets_valid_ = false;
+@@ -797,8 +962,45 @@ uint32_t RenderTargetCache::GetLastUpdateBoundRenderTargets(
+   return rts_used;
+ }
+ 
++bool RenderTargetCache::UseUnscaledDepthOnly(uint32_t pitch_pixels,
++                                            xenos::MsaaSamples samples) const {
++  return SupportsUnscaledDepthOnly() && GetPath() == Path::kHostRenderTargets &&
++         IsDrawResolutionScaled() && REXCVAR_GET(host_render_targets_unscaled_depth_only) &&
++         samples == xenos::MsaaSamples::k4X &&
++         (pitch_pixels == 640 || pitch_pixels == 280 || pitch_pixels == 160 || pitch_pixels == 320);
++}
++
++uint32_t RenderTargetCache::GetLastUpdateResolutionScaleX() const {
++  uint32_t scale_x, scale_y;
++  GetHostRenderTargetDrawScale(register_file().Get<reg::RB_SURFACE_INFO>().msaa_samples,
++                                scale_x, scale_y);
++  if (GetPath() == Path::kHostRenderTargets) {
++    for (const RenderTarget* rt : last_update_accumulated_render_targets_) {
++      if (rt) {
++        return rt->key().unscaled ? 1 : scale_x;
++      }
++    }
++  }
++  return scale_x;
++}
++
++uint32_t RenderTargetCache::GetLastUpdateResolutionScaleY() const {
++  uint32_t scale_x, scale_y;
++  GetHostRenderTargetDrawScale(register_file().Get<reg::RB_SURFACE_INFO>().msaa_samples,
++                                scale_x, scale_y);
++  if (GetPath() == Path::kHostRenderTargets) {
++    for (const RenderTarget* rt : last_update_accumulated_render_targets_) {
++      if (rt) {
++        return rt->key().unscaled ? 1 : scale_y;
++      }
++    }
++  }
++  return scale_y;
++}
++
+ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+-                                                  xenos::MsaaSamples msaa_samples) const {
++                                                xenos::MsaaSamples msaa_samples,
++                                                bool unscaled) const {
+   if (!pitch_tiles_at_32bpp) {
+     return 0;
+   }
+@@ -810,12 +1012,16 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+   static_assert(!(xenos::kTexture2DCubeMaxWidthHeight % xenos::kEdramTileHeightSamples),
+                 "Maximum guest render target height is assumed to always be a multiple "
+                 "of an EDRAM tile height");
++  uint32_t scale_y = unscaled ? 1 : draw_resolution_scale_y();
+   uint32_t max_height_scaled = std::min(
+-      xenos::kTexture2DCubeMaxWidthHeight * draw_resolution_scale_y(), GetMaxRenderTargetHeight());
++      xenos::kTexture2DCubeMaxWidthHeight * scale_y *
++          (IsHostRenderTargetSampleGrid() ? 2 : 1), GetMaxRenderTargetHeight());
+   uint32_t msaa_samples_y_log2 = uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
+-  uint32_t tile_height_samples_scaled = xenos::kEdramTileHeightSamples * draw_resolution_scale_y();
++  uint32_t tile_height_samples_scaled = xenos::kEdramTileHeightSamples * scale_y;
+   tile_rows =
+-      std::min(tile_rows, (max_height_scaled << msaa_samples_y_log2) / tile_height_samples_scaled);
++      std::min(tile_rows, (max_height_scaled <<
++                          (IsHostRenderTargetSampleGrid() ? 0 : msaa_samples_y_log2)) /
++                             tile_height_samples_scaled);
+   assert_not_zero(tile_rows);
+   return tile_rows * (xenos::kEdramTileHeightSamples >> msaa_samples_y_log2);
+ }
+@@ -823,7 +1029,7 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+ void RenderTargetCache::GetHostDepthStoreRectangleInfo(
+     const Transfer::Rectangle& transfer_rectangle, xenos::MsaaSamples msaa_samples,
+     HostDepthStoreRectangleConstant& rectangle_constant_out, uint32_t& group_count_x_out,
+-    uint32_t& group_count_y_out) const {
++    uint32_t& group_count_y_out, bool unscaled) const {
+   // Initialize to all bits zeroed.
+   HostDepthStoreRectangleConstant rectangle_constant;
+   // 8 pixels is the resolve granularity, both clearing and tile size are
+@@ -838,9 +1044,9 @@ void RenderTargetCache::GetHostDepthStoreRectangleInfo(
+   rectangle_constant.width_pixels_div_8_minus_1 = (transfer_rectangle.width_pixels >> 3) - 1;
+   rectangle_constant_out = rectangle_constant;
+   // 1 thread group = 64x8 host samples.
+-  uint32_t pixel_size_x = draw_resolution_scale_x()
++  uint32_t pixel_size_x = (unscaled ? 1 : draw_resolution_scale_x())
+                           << uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
+-  uint32_t pixel_size_y = draw_resolution_scale_y()
++  uint32_t pixel_size_y = (unscaled ? 1 : draw_resolution_scale_y())
+                           << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
+   group_count_x_out = (transfer_rectangle.width_pixels * pixel_size_x + 63) >> 6;
+   group_count_y_out = (transfer_rectangle.height_pixels * pixel_size_y) >> 3;
+@@ -990,7 +1196,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+   }
+   uint32_t pitch_pixels =
+       pitch_tiles_at_32bpp * (xenos::kEdramTileWidthSamples >> msaa_samples_x_log2);
+-  uint32_t pitch_pixels_scaled = pitch_pixels * draw_resolution_scale_x();
++  uint32_t pitch_pixels_scaled =
++      (pitch_pixels * draw_resolution_scale_x())
++      << (IsHostRenderTargetSampleGrid() ? msaa_samples_x_log2 : 0);
+   uint32_t max_render_target_width = GetMaxRenderTargetWidth();
+   if (pitch_pixels_scaled > max_render_target_width) {
+     // TODO(Triang3l): If really needed for some game on some device, clamp the
+@@ -1002,7 +1210,14 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+     return false;
+   }
+ 
+-  uint32_t render_target_height_pixels = GetRenderTargetHeight(pitch_tiles_at_32bpp, msaa_samples);
++  // Resolve mode is kCopy, not the mode of the following depth draw. Create
++  // depth-only clears with the same identity as matching draws, including the
++  // first clear before a target has ever been drawn to.
++  bool unscaled_depth_clear =
++      resolve_info.IsClearingDepth() && !resolve_info.IsClearingColor() &&
++      UseUnscaledDepthOnly(pitch_pixels, msaa_samples);
++  uint32_t render_target_height_pixels =
++      GetRenderTargetHeight(pitch_tiles_at_32bpp, msaa_samples, unscaled_depth_clear);
+   uint32_t base_offset_rows_at_32bpp = base_offset_tiles_at_32bpp / pitch_tiles_at_32bpp;
+   Transfer::Rectangle clear_rectangle;
+   clear_rectangle.x_pixels =
+@@ -1087,8 +1302,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+   if (depth_clear_length_tiles) {
+     depth_render_target_key.base_tiles = resolve_info.depth_original_base;
+     depth_render_target_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
+-    depth_render_target_key.msaa_samples = msaa_samples;
++    depth_render_target_key.msaa_samples = GetHostRenderTargetMsaaSamples(msaa_samples);
+     depth_render_target_key.is_depth = 1;
++    depth_render_target_key.unscaled = unscaled_depth_clear;
+     depth_render_target_key.resource_format = resolve_info.depth_edram_info.format;
+     depth_render_target = GetOrCreateRenderTarget(depth_render_target_key);
+     if (!depth_render_target) {
+@@ -1102,7 +1318,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+   if (color_clear_length_tiles) {
+     color_render_target_key.base_tiles = resolve_info.color_original_base;
+     color_render_target_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
+-    color_render_target_key.msaa_samples = msaa_samples;
++    color_render_target_key.msaa_samples = GetHostRenderTargetMsaaSamples(msaa_samples);
+     color_render_target_key.is_depth = 0;
+     color_render_target_key.resource_format = uint32_t(GetColorResourceFormat(
+         xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format)));
+@@ -1118,6 +1334,14 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+     return false;
+   }
+ 
++  // Transfer rectangles and the clear cutout must use the canonical resource
++  // key's pixel coordinates, before the backend applies resolution scaling.
++  if (IsHostRenderTargetSampleGrid()) {
++    clear_rectangle.x_pixels <<= msaa_samples_x_log2;
++    clear_rectangle.width_pixels <<= msaa_samples_x_log2;
++    clear_rectangle.y_pixels <<= msaa_samples_y_log2;
++    clear_rectangle.height_pixels <<= msaa_samples_y_log2;
++  }
+   clear_rectangle_out = clear_rectangle;
+   depth_render_target_out = depth_render_target;
+   depth_transfers_out.clear();
+diff --git a/src/graphics/pipeline/shader/dxbc_translator.cpp b/src/graphics/pipeline/shader/dxbc_translator.cpp
+index b452bc0..71186f6 100644
+--- a/src/graphics/pipeline/shader/dxbc_translator.cpp
++++ b/src/graphics/pipeline/shader/dxbc_translator.cpp
+@@ -615,6 +615,12 @@ void DxbcShaderTranslator::StartPixelShader() {
+ 
+   bool uses_register_dynamic_addressing = current_shader().uses_register_dynamic_addressing();
+   Modification shader_modification = GetDxbcShaderModification();
++  xenos::MsaaSamples sample_grid = shader_modification.pixel.host_render_target_msaa_collapsed
++      ? xenos::MsaaSamples::k1X : shader_modification.pixel.host_render_target_sample_grid;
++  uint32_t draw_resolution_scale_x =
++      draw_resolution_scale_x_ << uint32_t(sample_grid >= xenos::MsaaSamples::k4X);
++  uint32_t draw_resolution_scale_y =
++      draw_resolution_scale_y_ << uint32_t(sample_grid >= xenos::MsaaSamples::k2X);
+ 
+   // param_gen_interpolator is already 4 bits, no need for an interpolator count
+   // safety check.
+@@ -658,13 +664,13 @@ void DxbcShaderTranslator::StartPixelShader() {
+     in_position_used_ |= 0b0011;
+     a_.OpRoundNI(dxbc::Dest::R(param_gen_temp, 0b0011), dxbc::Src::V1D(in_reg_ps_position_));
+     uint32_t resolution_scaled_axes =
+-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
++        uint32_t(draw_resolution_scale_x > 1) | (uint32_t(draw_resolution_scale_y > 1) << 1);
+     if (resolution_scaled_axes) {
+       // Revert resolution scale - after truncating, so if the pixel position
+       // is passed to tfetch (assuming the game doesn't round it by itself),
+       // it will be sampled with higher resolution too.
+       a_.OpMul(dxbc::Dest::R(param_gen_temp, resolution_scaled_axes), dxbc::Src::R(param_gen_temp),
+-               dxbc::Src::LF(1.0f / draw_resolution_scale_x_, 1.0f / draw_resolution_scale_y_, 1.0f,
++               dxbc::Src::LF(1.0f / draw_resolution_scale_x, 1.0f / draw_resolution_scale_y, 1.0f,
+                              1.0f));
+     }
+     if (shader_modification.pixel.param_gen_point) {
+@@ -724,7 +730,7 @@ void DxbcShaderTranslator::StartPixelShader() {
+     dxbc::Src memexport_enabled_src(
+         dxbc::Src::R(system_temp_memexport_enabled_and_eM_written_, dxbc::Src::kXXXX));
+     uint32_t resolution_scaled_axes =
+-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
++        uint32_t(draw_resolution_scale_x > 1) | (uint32_t(draw_resolution_scale_y > 1) << 1);
+     if (resolution_scaled_axes) {
+       uint32_t memexport_condition_temp = PushSystemTemp();
+       // Only do memexport for one host pixel in a guest pixel - prefer the
+@@ -737,10 +743,10 @@ void DxbcShaderTranslator::StartPixelShader() {
+                 dxbc::Src::V1D(in_reg_ps_position_));
+       a_.OpUDiv(dxbc::Dest::Null(), dxbc::Dest::R(memexport_condition_temp, resolution_scaled_axes),
+                 dxbc::Src::R(memexport_condition_temp),
+-                dxbc::Src::LU(draw_resolution_scale_x_, draw_resolution_scale_y_, 0, 0));
++                dxbc::Src::LU(draw_resolution_scale_x, draw_resolution_scale_y, 0, 0));
+       a_.OpIEq(dxbc::Dest::R(memexport_condition_temp, resolution_scaled_axes),
+                dxbc::Src::R(memexport_condition_temp),
+-               dxbc::Src::LU(draw_resolution_scale_x_ >> 1, draw_resolution_scale_y_ >> 1, 0, 0));
++               dxbc::Src::LU(draw_resolution_scale_x >> 1, draw_resolution_scale_y >> 1, 0, 0));
+       for (uint32_t i = 0; i < 2; ++i) {
+         if (!(resolution_scaled_axes & (1 << i))) {
+           continue;
 diff --git a/src/graphics/pipeline/shader/dxbc_translator_om.cpp b/src/graphics/pipeline/shader/dxbc_translator_om.cpp
-index a7d508a..013225f 100644
+index a7d508a..4a4c2da 100644
 --- a/src/graphics/pipeline/shader/dxbc_translator_om.cpp
 +++ b/src/graphics/pipeline/shader/dxbc_translator_om.cpp
 @@ -1548,6 +1548,15 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToRTVs() {
@@ -4901,11 +6273,98 @@ index a7d508a..013225f 100644
      if (gamma_render_target_as_unorm8_) {
        // Convert to gamma space - this is incorrect, since it must be done after
        // blending on the Xbox 360, but this is just one of many blending issues
+@@ -1738,6 +1747,21 @@ void DxbcShaderTranslator::CompletePixelShader_AlphaToMask() {
+   // temp.x = alpha to coverage offset as float 0.0...3.0.
+   in_position_used_ |= 0b0011;
+   a_.OpFToU(dxbc::Dest::R(temp, 0b0011), dxbc::Src::V1D(in_reg_ps_position_));
++  xenos::MsaaSamples sample_grid = GetDxbcShaderModification().pixel.host_render_target_sample_grid;
++  bool collapse_msaa = GetDxbcShaderModification().pixel.host_render_target_msaa_collapsed != 0;
++  if (!collapse_msaa && sample_grid != xenos::MsaaSamples::k1X) {
++    // Dither at the original scaled guest pixel, consistently for all samples.
++    uint32_t remainder_temp = PushSystemTemp();
++    a_.OpUDiv(dxbc::Dest::R(temp, 0b0011), dxbc::Dest::R(remainder_temp, 0b0011),
++              dxbc::Src::R(temp),
++              dxbc::Src::LU(draw_resolution_scale_x_, draw_resolution_scale_y_, 1, 1));
++    a_.OpUShR(dxbc::Dest::R(temp, 0b0011), dxbc::Src::R(temp),
++               dxbc::Src::LU(uint32_t(sample_grid >= xenos::MsaaSamples::k4X), 1, 0, 0));
++    a_.OpUMAd(dxbc::Dest::R(temp, 0b0011), dxbc::Src::R(temp),
++               dxbc::Src::LU(draw_resolution_scale_x_, draw_resolution_scale_y_, 1, 1),
++               dxbc::Src::R(remainder_temp));
++    PopSystemTemp();
++  }
+   a_.OpAnd(dxbc::Dest::R(temp, 0b0010), dxbc::Src::R(temp, dxbc::Src::kYYYY), dxbc::Src::LU(1));
+   a_.OpBFI(temp_x_dest, dxbc::Src::LU(1), dxbc::Src::LU(1), temp_x_src,
+            dxbc::Src::R(temp, dxbc::Src::kYYYY));
+@@ -1806,6 +1830,36 @@ void DxbcShaderTranslator::CompletePixelShader_AlphaToMask() {
+     a_.OpRetC(false, temp_x_src);
+   } else {
+     dxbc::Src coverage_src(dxbc::Src::R(coverage_temp, coverage_temp_component));
++    if (collapse_msaa) {
++      // All guest samples alias this pixel. Keep guest sample 0's alpha mask;
++      // native D3D 2x maps that guest sample to physical bit 1, all others to 0.
++      uint32_t sample_bit =
++          sample_grid == xenos::MsaaSamples::k2X && msaa_2x_supported_ ? 1 : 0;
++      a_.OpUBFE(dxbc::Dest::R(coverage_temp, uint32_t(1) << coverage_temp_component),
++                dxbc::Src::LU(1), dxbc::Src::LU(sample_bit),
++                dxbc::Src::R(coverage_temp).Select(coverage_temp_component));
++    } else if (sample_grid != xenos::MsaaSamples::k1X) {
++      // Select this pixel block's guest sample from the normal D3D sample mask
++      // and write it to bit 0 of the single-sampled resource's SV_Coverage.
++      a_.OpFToU(dxbc::Dest::R(temp, 0b0011), dxbc::Src::V1D(in_reg_ps_position_));
++      a_.OpUDiv(dxbc::Dest::R(temp, 0b0011), dxbc::Dest::Null(), dxbc::Src::R(temp),
++                dxbc::Src::LU(draw_resolution_scale_x_, draw_resolution_scale_y_, 1, 1));
++      a_.OpAnd(dxbc::Dest::R(temp, 0b0011), dxbc::Src::R(temp), dxbc::Src::LU(1));
++      if (sample_grid == xenos::MsaaSamples::k4X) {
++        a_.OpUMAd(temp_x_dest, dxbc::Src::R(temp, dxbc::Src::kYYYY), dxbc::Src::LU(2),
++                   temp_x_src);
++      } else if (msaa_2x_supported_) {
++        // Native 2x uses D3D sample 1 for the top guest sample: 1 - Y.
++        a_.OpUMAd(temp_x_dest, dxbc::Src::R(temp, dxbc::Src::kYYYY),
++                   dxbc::Src::LU(UINT32_MAX), dxbc::Src::LU(1));
++      } else {
++        a_.OpUMAd(temp_x_dest, dxbc::Src::R(temp, dxbc::Src::kYYYY), dxbc::Src::LU(3),
++                   dxbc::Src::LU(0));
++      }
++      a_.OpUBFE(dxbc::Dest::R(coverage_temp, uint32_t(1) << coverage_temp_component),
++                 dxbc::Src::LU(1), temp_x_src,
++                 dxbc::Src::R(coverage_temp).Select(coverage_temp_component));
++    }
+     a_.OpDiscard(false, coverage_src);
+     a_.OpMov(dxbc::Dest::OMask(), coverage_src);
+   }
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
-index ebef1aa..aeaed78 100644
+index ebef1aa..6fe550b 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
-@@ -574,7 +574,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+@@ -314,7 +314,8 @@ void TextureCache::BeginFrame() {
+   ResetTextureBindings();
+ }
+ 
+-void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled) {
++void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled,
++                                       bool scaled) {
+   if (length_unscaled == 0) {
+     return;
+   }
+@@ -335,8 +336,15 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
+       if (i == block_last && (page_last & 31) != 31) {
+         add_bits &= (UINT32_C(1) << ((page_last & 31) + 1)) - 1;
+       }
+-      scaled_resolve_pages_[i] |= add_bits;
+-      scaled_resolve_pages_l2_[i >> 6] |= UINT64_C(1) << (i & 63);
++      if (scaled) {
++        scaled_resolve_pages_[i] |= add_bits;
++        scaled_resolve_pages_l2_[i >> 6] |= UINT64_C(1) << (i & 63);
++      } else {
++        scaled_resolve_pages_[i] &= ~add_bits;
++        if (!scaled_resolve_pages_[i]) {
++          scaled_resolve_pages_l2_[i >> 6] &= ~(UINT64_C(1) << (i & 63));
++        }
++      }
+     }
+   }
+ 
+@@ -574,7 +582,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
        pending_shared_memory_range_pairs.emplace_back(pending_range.start, pending_range.length);
      }
      batched_shared_memory_request_succeeded = shared_memory().RequestRanges(
@@ -4914,7 +6373,7 @@ index ebef1aa..aeaed78 100644
    }
  
    if (batched_shared_memory_request_succeeded) {
-@@ -929,7 +929,7 @@ bool TextureCache::LoadTextureData(Texture& texture) {
+@@ -929,7 +937,7 @@ bool TextureCache::LoadTextureData(Texture& texture) {
    for (size_t i = 0; i < pending_range_count; ++i) {
      pending_range_pairs[i] = std::make_pair(pending_ranges[i].start, pending_ranges[i].length);
    }
@@ -97385,6 +98844,43 @@ index 333becb..b8cc6a1 100644
  }
  
  std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallbackThunk(
+diff --git a/src/graphics/util/draw.cpp b/src/graphics/util/draw.cpp
+index 8bc5391..fce2878 100644
+--- a/src/graphics/util/draw.cpp
++++ b/src/graphics/util/draw.cpp
+@@ -839,7 +839,8 @@ const ResolveCopyShaderInfo resolve_copy_shader_info[size_t(ResolveCopyShaderInd
+ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+                     TraceWriter& trace_writer, uint32_t draw_resolution_scale_x,
+                     uint32_t draw_resolution_scale_y, bool fixed_rg16_truncated_to_minus_1_to_1,
+-                    bool fixed_rgba16_truncated_to_minus_1_to_1, ResolveInfo& info_out) {
++                    bool fixed_rgba16_truncated_to_minus_1_to_1, ResolveInfo& info_out,
++                    bool collapse_msaa) {
+   // Don't pass uninitialized values to shaders, not to leak data to frame
+   // captures. Also initialize an invalid resolve to empty.
+   info_out.coordinate_info.packed = 0;
+@@ -938,6 +939,13 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+     return false;
+   }
+ 
++  // All guest samples alias the one stored pixel. Use the same compressed 1x
++  // address space as RT ownership, including for partial resolves and clears.
++  // Do this before deriving tile offsets rather than shifting rounded pitches.
++  if (collapse_msaa) {
++    rb_surface_info.msaa_samples = xenos::MsaaSamples::k1X;
++  }
++
+   // Clamp to the EDRAM surface pitch (maximum possible surface pitch is also
+   // assumed to be the largest resolvable size).
+   int32_t surface_pitch_aligned =
+@@ -985,7 +993,7 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+   // Get the sample selection to safely pass to the shader.
+   xenos::CopySampleSelect sample_select = SanitizeCopySampleSelect(
+       rb_copy_control.copy_sample_select, rb_surface_info.msaa_samples, is_depth);
+-  if (rb_copy_control.copy_sample_select != sample_select) {
++  if (!collapse_msaa && rb_copy_control.copy_sample_select != sample_select) {
+     REXGPU_WARN(
+         "Incorrect resolve sample selected for {}-sample {}: {}, treating like "
+         "{}",
 diff --git a/src/graphics/util/draw_extent_estimator.cpp b/src/graphics/util/draw_extent_estimator.cpp
 index 47d40f7..74ac573 100644
 --- a/src/graphics/util/draw_extent_estimator.cpp

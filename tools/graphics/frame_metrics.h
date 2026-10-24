@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <rex/logging.h>
+#include <rex/graphics/d3d12/fm4_frame_trace.h>
 
 namespace fm4::frame_metrics {
 // Event timeline for one short window (FM4_TIMELINE=<metrics phase>, with FM4_FRAME_METRICS):
@@ -495,6 +496,11 @@ struct Scope {
   }
 };
 inline void Frame(uint32_t width, uint32_t height) {
+  // The trace can use metrics-phase.txt without enabling CPU/GPU timers.
+  if (fm4::frame_trace::enabled && !Get().enabled) {
+    Get().ReadPhase();
+    fm4::frame_trace::Boundary(Get().phase);
+  }
   if (!Get().enabled) return;
   const auto previous_window = Get().window;
   if (Get().Frame(width, height)) {
@@ -504,5 +510,6 @@ inline void Frame(uint32_t width, uint32_t height) {
     // Discard initialization / phase-change commands with the CPU window.
     Transfers().stats.clear();
   }
+  if (fm4::frame_trace::enabled) fm4::frame_trace::Boundary(Get().phase);
 }
 }  // namespace fm4::frame_metrics
