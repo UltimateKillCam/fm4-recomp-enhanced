@@ -295,7 +295,7 @@ index 7a9d6a2..1e6e5d2 100644
    bool storage_write_flush_pipelines_ = false;
    bool storage_write_thread_shutdown_ = false;
 diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
-index b9d2688..fb6d94a 100644
+index b9d2688..c2f6efa 100644
 --- a/include/rex/graphics/d3d12/render_target_cache.h
 +++ b/include/rex/graphics/d3d12/render_target_cache.h
 @@ -69,6 +69,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
@@ -331,7 +331,31 @@ index b9d2688..fb6d94a 100644
    // For traces.
    ID3D12Resource* edram_snapshot_download_buffer_ = nullptr;
    std::unique_ptr<ui::d3d12::D3D12UploadBufferPool> edram_snapshot_restore_pool_;
-@@ -392,11 +404,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+@@ -225,6 +237,15 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+           descriptor_srv_stencil_(std::move(descriptor_srv_stencil)),
+           resource_state_(resource_state) {}
+ 
++    // Retained with the target so in-flight commands and RTV descriptors keep
++    // the same lifetime as the depth resource. Allocated only for the opt-in path.
++    struct StencilCopyTexture {
++      Microsoft::WRL::ComPtr<ID3D12Resource> resource;
++      ui::d3d12::D3D12CpuDescriptorPool::Descriptor descriptor;
++      D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COPY_DEST;
++    };
++    StencilCopyTexture& stencil_copy_texture() { return stencil_copy_texture_; }
++
+     ID3D12Resource* resource() const { return resource_.Get(); }
+     const ui::d3d12::D3D12CpuDescriptorPool::Descriptor& descriptor_draw() const {
+       return descriptor_draw_;
+@@ -257,6 +278,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+     void SetTemporarySortIndex(uint32_t index) { temporary_sort_index_ = index; }
+ 
+    private:
++    StencilCopyTexture stencil_copy_texture_;
+     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
+     ui::d3d12::D3D12CpuDescriptorPool::Descriptor descriptor_draw_;
+     ui::d3d12::D3D12CpuDescriptorPool::Descriptor descriptor_load_separate_;
+@@ -392,11 +414,16 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
        // this is done only for the color source).
        uint32_t host_depth_source_is_copy : 1;
  
@@ -346,10 +370,12 @@ index b9d2688..fb6d94a 100644
 +      uint32_t dest_unscaled : 1;
 +      uint32_t source_unscaled : 1;
 +      uint32_t host_depth_source_unscaled : 1;
++      // Stencil-bit modes with identical decoding, writing bytes to an R8 RTV.
++      uint32_t stencil_copy : 1;
      };
  
      TransferShaderKey() : key(0) { static_assert_size(*this, sizeof(key)); }
-@@ -481,6 +496,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+@@ -481,6 +508,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
      struct {
        xenos::MsaaSamples msaa_samples : 2;
        uint32_t resource_format : 4;
@@ -358,7 +384,16 @@ index b9d2688..fb6d94a 100644
        // Last bit because this affects the root signature - after sorting, only
        // change it at most once. Depth buffers have an additional stencil SRV.
        uint32_t is_depth : 1;
-@@ -666,7 +683,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+@@ -642,6 +671,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+     return source_is_depth ? TransferMode::kDepthToColor : TransferMode::kColorToColor;
+   }
+ 
++  bool PrepareStencilCopyTexture(D3D12RenderTarget& render_target);
++
+   // Do ownership transfers for render targets - each render target / vector may
+   // be null / empty in case there's nothing to do for them.
+   // resolve_clear_rectangle is expected to be provided by
+@@ -666,7 +697,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
    // Writes contents of host render targets within rectangles from
    // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
    bool DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
@@ -367,7 +402,7 @@ index b9d2688..fb6d94a 100644
  
    bool use_stencil_reference_output_ = false;
  
-@@ -676,6 +693,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+@@ -676,6 +707,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
    bool depth_float24_convert_in_pixel_shader_ = false;
  
    bool msaa_2x_supported_ = false;
@@ -3763,7 +3798,7 @@ index 8e6b854..e5aeb3a 100644
      Pipeline* pipeline_to_create = nullptr;
  
 diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
-index 4dd8332..8a8048b 100644
+index 4dd8332..ec0a586 100644
 --- a/src/graphics/d3d12/render_target_cache.cpp
 +++ b/src/graphics/d3d12/render_target_cache.cpp
 @@ -14,9 +14,12 @@
@@ -3793,7 +3828,7 @@ index 4dd8332..8a8048b 100644
  #include <rex/graphics/trace_writer.h>
  #include <rex/graphics/util/draw.h>
  #include <rex/graphics/xenos.h>
-@@ -46,8 +51,25 @@ REXCVAR_DEFINE_STRING(render_target_path_d3d12, "", "GPU/D3D12",
+@@ -46,8 +51,28 @@ REXCVAR_DEFINE_STRING(render_target_path_d3d12, "", "GPU/D3D12",
                        "D3D12 render target implementation path")
      .lifecycle(rex::cvar::Lifecycle::kInitOnly);
  
@@ -3803,6 +3838,9 @@ index 4dd8332..8a8048b 100644
 +
  REXCVAR_DEFINE_BOOL(native_stencil_value_output, true, "GPU", "Enable native stencil value output");
  
++REXCVAR_DEFINE_BOOL(host_render_targets_stencil_copy_transfer, false, "GPU/D3D12",
++                    "Copy reconstructed stencil bytes into single-sampled host depth targets");
++
 +REXCVAR_DEFINE_BOOL(host_render_targets_skip_color_to_depth_transfers, false, "GPU/D3D12",
 +                    "Initialize depth/stencil instead of transferring from color owners (FM4)");
 +
@@ -3819,7 +3857,7 @@ index 4dd8332..8a8048b 100644
  namespace rex::graphics::d3d12 {
  
  // Generated with `xb buildshaders`.
-@@ -171,6 +193,8 @@ D3D12RenderTargetCache::~D3D12RenderTargetCache() {
+@@ -171,6 +196,8 @@ D3D12RenderTargetCache::~D3D12RenderTargetCache() {
  }
  
  bool D3D12RenderTargetCache::Initialize() {
@@ -3828,7 +3866,7 @@ index 4dd8332..8a8048b 100644
    const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
    ID3D12Device* device = provider.GetDevice();
  
-@@ -293,8 +317,9 @@ bool D3D12RenderTargetCache::Initialize() {
+@@ -293,8 +320,9 @@ bool D3D12RenderTargetCache::Initialize() {
    // Binding all of the shared memory at 1x resolution, portions with scaled
    // resolution.
    resolve_copy_root_parameters[0].Constants.Num32BitValues =
@@ -3840,7 +3878,7 @@ index 4dd8332..8a8048b 100644
        sizeof(uint32_t);
    resolve_copy_root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
    // Parameter 1 is the destination (shared memory).
-@@ -379,6 +404,12 @@ bool D3D12RenderTargetCache::Initialize() {
+@@ -379,6 +407,12 @@ bool D3D12RenderTargetCache::Initialize() {
    if (path_ == Path::kHostRenderTargets) {
      // Host render targets.
  
@@ -3853,7 +3891,7 @@ index 4dd8332..8a8048b 100644
      gamma_render_target_as_unorm16_ = REXCVAR_GET(gamma_render_target_as_unorm16);
  
      depth_float24_round_ = REXCVAR_GET(depth_float24_round);
-@@ -1030,6 +1061,9 @@ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
+@@ -1030,6 +1064,9 @@ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
    for (size_t i = 0; i < rex::countof(resolve_copy_pipelines_); ++i) {
      ui::d3d12::util::ReleaseAndNull(resolve_copy_pipelines_[i]);
    }
@@ -3863,7 +3901,7 @@ index 4dd8332..8a8048b 100644
    ui::d3d12::util::ReleaseAndNull(resolve_copy_root_signature_);
  
    edram_snapshot_restore_pool_.reset();
-@@ -1059,10 +1093,20 @@ void D3D12RenderTargetCache::BeginSubmission() {
+@@ -1059,10 +1096,20 @@ void D3D12RenderTargetCache::BeginSubmission() {
    if (edram_buffer_modification_status_ != EdramBufferModificationStatus::kUnmodified) {
      assert_true(edram_buffer_state_ == D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
      edram_buffer_modification_status_ = EdramBufferModificationStatus::kUnmodified;
@@ -3885,7 +3923,7 @@ index 4dd8332..8a8048b 100644
  bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
                                      reg::RB_DEPTHCONTROL normalized_depth_control,
                                      uint32_t normalized_color_mask, const Shader& vertex_shader) {
-@@ -1072,6 +1116,25 @@ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
+@@ -1072,6 +1119,25 @@ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
    }
    switch (GetPath()) {
      case Path::kHostRenderTargets: {
@@ -3911,7 +3949,7 @@ index 4dd8332..8a8048b 100644
        RenderTarget* const* depth_and_color_render_targets =
            last_update_accumulated_render_targets();
        PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
-@@ -1178,11 +1241,58 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1178,11 +1244,58 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
    bool fixed_16_truncated_to_minus_1_to_1 = IsFixed16TruncatedToMinus1To1();
    if (!draw_util::GetResolveInfo(register_file(), memory, trace_writer_, draw_resolution_scale_x(),
                                   draw_resolution_scale_y(), fixed_16_truncated_to_minus_1_to_1,
@@ -3971,7 +4009,7 @@ index 4dd8332..8a8048b 100644
    // Nothing to copy/clear.
    if (!resolve_info.coordinate_info.width_div_8 || !resolve_info.height_div_8) {
      return true;
-@@ -1196,18 +1306,32 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1196,18 +1309,32 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
      REXGPU_INFO(
          "[RT_TRACE #{}] resolve-begin path={} copy={} src={} edram_base={} edram_span={}x{} "
          "edram_pitch={} dest_base={:08X} dest_extent={:08X}+{:X} rect={}x{} clear_color={} "
@@ -4006,7 +4044,7 @@ index 4dd8332..8a8048b 100644
    // Copying.
    bool copied = false;
    const char* copy_route = "none";
-@@ -1215,15 +1339,44 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1215,15 +1342,44 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
      draw_util::ResolveCopyShaderConstants copy_shader_constants;
      uint32_t copy_group_count_x, copy_group_count_y;
      draw_util::ResolveCopyShaderIndex copy_shader =
@@ -4053,7 +4091,7 @@ index 4dd8332..8a8048b 100644
            direct_resolved =
                TryResolveCopyDirectly(resolve_info, copy_shader, draw_resolution_scaled);
            if (direct_resolved) {
-@@ -1243,7 +1396,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1243,7 +1399,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
            uint32_t dump_rows;
            uint32_t dump_pitch;
            resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
@@ -4063,7 +4101,7 @@ index 4dd8332..8a8048b 100644
              REXGPU_ERROR("D3D12RenderTargetCache: Failed to dump host render targets for resolve");
              return false;
            }
-@@ -1259,7 +1413,16 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1259,7 +1416,16 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
          // Committing starting with the beginning of the potentially written
          // extent, but making the buffer containing the base current as the
          // beginning of the bound buffer is the base.
@@ -4081,7 +4119,7 @@ index 4dd8332..8a8048b 100644
              texture_cache.EnsureScaledResolveMemoryCommitted(
                  resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length) &&
              texture_cache.MakeScaledResolveRangeCurrent(resolve_info.copy_dest_base,
-@@ -1331,7 +1494,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1331,7 +1497,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
              command_list.D3DSetComputeRoot32BitConstants(
                  0, sizeof(copy_shader_constants) / sizeof(uint32_t), &copy_shader_constants, 0);
            }
@@ -4090,7 +4128,7 @@ index 4dd8332..8a8048b 100644
            command_processor_.SubmitBarriers();
            command_list.D3DDispatch(copy_group_count_x, copy_group_count_y, 1);
  
-@@ -1342,9 +1505,60 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1342,9 +1508,60 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
              shared_memory.MarkUAVWritesCommitNeeded();
            }
  
@@ -4154,7 +4192,7 @@ index 4dd8332..8a8048b 100644
            written_address_out = resolve_info.copy_dest_extent_start;
            written_length_out = resolve_info.copy_dest_extent_length;
            copied = true;
-@@ -1361,6 +1575,15 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1361,6 +1578,15 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
    }
  
    // Clearing.
@@ -4170,7 +4208,7 @@ index 4dd8332..8a8048b 100644
    bool cleared = false;
    bool clear_depth = resolve_info.IsClearingDepth();
    bool clear_color = resolve_info.IsClearingColor();
-@@ -1449,6 +1672,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+@@ -1449,6 +1675,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
    }
  
    bool succeeded = copied && cleared;
@@ -4178,7 +4216,7 @@ index 4dd8332..8a8048b 100644
    if (AcquireRenderTargetLifecycleTraceEvent(trace_sequence)) {
      REXGPU_INFO(
          "[RT_TRACE #{}] resolve-end path={} route={} copied={} cleared={} success={} "
-@@ -1750,9 +1974,10 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(Rend
+@@ -1750,9 +1977,10 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(Rend
    D3D12_RESOURCE_DESC resource_desc;
    resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
    resource_desc.Alignment = 0;
@@ -4191,7 +4229,7 @@ index 4dd8332..8a8048b 100644
    resource_desc.DepthOrArraySize = 1;
    resource_desc.MipLevels = 1;
    if (key.is_depth) {
-@@ -1943,7 +2168,8 @@ void D3D12RenderTargetCache::CommitEdramBufferUAVWrites(
+@@ -1943,7 +2171,8 @@ void D3D12RenderTargetCache::CommitEdramBufferUAVWrites(
      command_processor_.PushUAVBarrier(edram_buffer_);
    }
    edram_buffer_modification_status_ = EdramBufferModificationStatus::kUnmodified;
@@ -4201,7 +4239,35 @@ index 4dd8332..8a8048b 100644
  }
  
  ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines(
-@@ -2617,8 +2843,12 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+@@ -1951,7 +2180,7 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   const TransferModeInfo& mode = kTransferModes[size_t(key.mode)];
+   bool dest_is_stencil_bit = (mode.output == TransferOutput::kStencilBit);
+ 
+-  if (dest_is_stencil_bit) {
++  if (dest_is_stencil_bit && !key.stencil_copy) {
+     auto pipelines_it = transfer_stencil_bit_pipelines_.find(key);
+     if (pipelines_it != transfer_stencil_bit_pipelines_.end()) {
+       return pipelines_it->second[0] ? pipelines_it->second.data() : nullptr;
+@@ -2443,7 +2672,8 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   // Color or depth.
+   uint32_t osgn_parameter_count = 0;
+   uint32_t osgn_parameter_index_sv_target =
+-      mode.output == TransferOutput::kColor ? osgn_parameter_count++ : UINT32_MAX;
++      (mode.output == TransferOutput::kColor || key.stencil_copy)
++          ? osgn_parameter_count++ : UINT32_MAX;
+   uint32_t osgn_parameter_index_sv_depth =
+       mode.output == TransferOutput::kDepth ? osgn_parameter_count++ : UINT32_MAX;
+   uint32_t osgn_parameter_index_sv_stencil_ref =
+@@ -2474,7 +2704,7 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   if (mode.output == TransferOutput::kColor) {
+     GetColorOwnershipTransferDXGIFormat(dest_color_format, &dest_color_is_uint);
+   } else {
+-    dest_color_is_uint = false;
++    dest_color_is_uint = key.stencil_copy != 0;
+   }
+ 
+   // Header and parameters.
+@@ -2617,8 +2847,12 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
    // for the coordinates for that load. Currently 3 temps are enough.
    a.OpDclTemps(3);
  
@@ -4216,7 +4282,7 @@ index 4dd8332..8a8048b 100644
  
    uint32_t tile_width_samples = xenos::kEdramTileWidthSamples * draw_resolution_scale_x;
    uint32_t tile_height_samples = xenos::kEdramTileHeightSamples * draw_resolution_scale_y;
-@@ -2627,6 +2857,10 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+@@ -2627,6 +2861,10 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
    // 32bpp-tile-relative pixel index in r0.xy.
    // r0.xy = pixel XY as uint
    a.OpFToU(dxbc::Dest::R(0, 0b0011), dxbc::Src::V1D(kInputRegisterPosition));
@@ -4227,7 +4293,7 @@ index 4dd8332..8a8048b 100644
    uint32_t dest_tile_width_pixels =
        tile_width_samples >>
        (uint32_t(dest_is_64bpp) + uint32_t(key.dest_msaa_samples >= xenos::MsaaSamples::k4X));
-@@ -2994,6 +3228,15 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+@@ -2994,6 +3232,15 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
    // the coordinates needed for stencil loading).
    // Stencil will be loaded to x.
    // Color will be loaded to x...w.
@@ -4243,7 +4309,7 @@ index 4dd8332..8a8048b 100644
    bool source_load_is_two_dwords = !source_is_64bpp && dest_is_64bpp;
    if (key.source_msaa_samples != xenos::MsaaSamples::k1X) {
      for (uint32_t i = 0; i <= uint32_t(source_load_is_two_dwords); ++i) {
-@@ -3500,6 +3743,14 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+@@ -3500,6 +3747,14 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
                // 40-sample columns are not swapped for addressing simplicity
                // (because this is used for depth -> depth transfers, where
                // swapping isn't needed).
@@ -4258,7 +4324,7 @@ index 4dd8332..8a8048b 100644
                // Convert samples to pixels.
                assert_true(key.host_depth_source_msaa_samples == xenos::MsaaSamples::k1X);
                if (key.dest_msaa_samples >= xenos::MsaaSamples::k2X) {
-@@ -3527,10 +3778,10 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+@@ -3527,10 +3782,10 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
                // The tile index doesn't need to be wrapped, as the host depth is
                // written to the beginning of the buffer, without the base
                // offset.
@@ -4271,7 +4337,7 @@ index 4dd8332..8a8048b 100644
                         dxbc::Src::R(0, dxbc::Src::kZZZZ), dxbc::Src::R(0, dxbc::Src::kXXXX));
                // Load from the buffer.
                a.OpLd(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(0, dxbc::Src::kXXXX), 0b0001,
-@@ -3687,6 +3938,13 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+@@ -3687,6 +3942,13 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
                             tile_height_samples >>
                             uint32_t(key.host_depth_source_msaa_samples >= xenos::MsaaSamples::k2X)),
                         dxbc::Src::R(0, dxbc::Src::kZZZZ), dxbc::Src::R(0, dxbc::Src::kYYYY));
@@ -4285,7 +4351,96 @@ index 4dd8332..8a8048b 100644
                // Load from the host depth texture.
                if (key.host_depth_source_msaa_samples != xenos::MsaaSamples::k1X) {
                  a.OpLdMS(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(0), 0b0011,
-@@ -3999,18 +4257,54 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -3763,12 +4025,18 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+         a.OpMov(dxbc::Dest::ODepth(), dxbc::Src::R(1, dxbc::Src::kWWWW));
+         break;
+       case TransferOutput::kStencilBit:
+-        // Discard the sample if the needed stencil bit is not set.
+-        assert_true(cbuffer_index_stencil_mask != UINT32_MAX);
+-        a.OpAnd(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(1, dxbc::Src::kXXXX),
+-                dxbc::Src::CB(cbuffer_index_stencil_mask, kTransferCBVRegisterStencilMask, 0,
+-                              dxbc::Src::kXXXX));
+-        a.OpDiscard(false, dxbc::Src::R(0, dxbc::Src::kXXXX));
++        if (key.stencil_copy) {
++          // Keep all stencil-bit source decoding and addressing above. Mask
++          // explicitly: integer RTV conversion must not clamp a packed word.
++          a.OpAnd(dxbc::Dest::O(0), dxbc::Src::R(1, dxbc::Src::kXXXX), dxbc::Src::LU(255));
++        } else {
++          // Discard the sample if the needed stencil bit is not set.
++          assert_true(cbuffer_index_stencil_mask != UINT32_MAX);
++          a.OpAnd(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(1, dxbc::Src::kXXXX),
++                  dxbc::Src::CB(cbuffer_index_stencil_mask, kTransferCBVRegisterStencilMask, 0,
++                                dxbc::Src::kXXXX));
++          a.OpDiscard(false, dxbc::Src::R(0, dxbc::Src::kXXXX));
++        }
+         break;
+     }
+   }
+@@ -3886,7 +4154,7 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   pipeline_desc.InputLayout.pInputElementDescs = &pipeline_input_element_desc;
+   pipeline_desc.InputLayout.NumElements = 1;
+   pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+-  if (dest_is_stencil_bit) {
++  if (dest_is_stencil_bit && !key.stencil_copy) {
+     pipeline_desc.DepthStencilState.StencilEnable = TRUE;
+     pipeline_desc.DepthStencilState.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+     pipeline_desc.DepthStencilState.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+@@ -3916,10 +4184,12 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+     }
+     pipelines = stencil_pipelines_created ? stencil_bit_pipelines.data() : nullptr;
+   } else {
+-    if (dest_is_color) {
++    if (dest_is_color || key.stencil_copy) {
+       pipeline_desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+       pipeline_desc.NumRenderTargets = 1;
+-      pipeline_desc.RTVFormats[0] = GetColorOwnershipTransferDXGIFormat(dest_color_format);
++      pipeline_desc.RTVFormats[0] = key.stencil_copy
++                                      ? DXGI_FORMAT_R8_UINT
++                                      : GetColorOwnershipTransferDXGIFormat(dest_color_format);
+     } else {
+       pipeline_desc.DepthStencilState.DepthEnable = TRUE;
+       pipeline_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+@@ -3986,6 +4256,39 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   return pipelines;
+ }
+ 
++bool D3D12RenderTargetCache::PrepareStencilCopyTexture(D3D12RenderTarget& render_target) {
++  auto& scratch = render_target.stencil_copy_texture();
++  if (scratch.resource) {
++    return true;
++  }
++  const auto& provider = command_processor_.GetD3D12Provider();
++  ID3D12Device* device = provider.GetDevice();
++  D3D12_RESOURCE_DESC desc = render_target.resource()->GetDesc();
++  if (desc.SampleDesc.Count != 1 || desc.MipLevels != 1 || desc.DepthOrArraySize != 1 ||
++      (desc.Format != DXGI_FORMAT_R24G8_TYPELESS &&
++       desc.Format != DXGI_FORMAT_R32G8X24_TYPELESS)) {
++    return false;
++  }
++  auto descriptor = descriptor_pool_color_->AllocateDescriptor();
++  if (!descriptor.IsValid()) {
++    return false;
++  }
++  desc.Format = DXGI_FORMAT_R8_UINT;
++  desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
++  Microsoft::WRL::ComPtr<ID3D12Resource> resource;
++  if (FAILED(device->CreateCommittedResource(
++          &ui::d3d12::util::kHeapPropertiesDefault, D3D12_HEAP_FLAG_NONE, &desc,
++          D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&resource)))) {
++    return false;
++  }
++  device->CreateRenderTargetView(resource.Get(), nullptr, descriptor.GetHandle());
++  resource->SetName(L"Render target stencil transfer scratch");
++  scratch.resource = std::move(resource);
++  scratch.descriptor = std::move(descriptor);
++  scratch.state = D3D12_RESOURCE_STATE_COPY_DEST;
++  return true;
++}
++
+ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+     uint32_t render_target_count, RenderTarget* const* render_targets,
+     const std::vector<Transfer>* render_target_transfers,
+@@ -3999,18 +4302,54 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
    DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
  
    bool resolve_clear_needed = render_target_resolve_clear_values && resolve_clear_rectangle;
@@ -4352,7 +4507,7 @@ index 4dd8332..8a8048b 100644
    }
  
    // Do host depth storing for the depth destination (assuming there can be only
-@@ -4064,7 +4358,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4064,7 +4403,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
          // Render target constant.
          HostDepthStoreRenderTargetConstant host_depth_store_render_target_constant =
              GetHostDepthStoreRenderTargetConstant(dest_rt_key.pitch_tiles_at_32bpp,
@@ -4361,7 +4516,7 @@ index 4dd8332..8a8048b 100644
          command_list.D3DSetComputeRoot32BitConstants(
              kHostDepthStoreRootParameterConstants,
              sizeof(host_depth_store_render_target_constant) / sizeof(uint32_t),
-@@ -4095,7 +4389,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4095,7 +4434,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
          uint32_t group_count_x, group_count_y;
          GetHostDepthStoreRectangleInfo(transfer_rectangles[j], dest_rt_key.msaa_samples,
                                         host_depth_store_rectangle_constant, group_count_x,
@@ -4370,7 +4525,7 @@ index 4dd8332..8a8048b 100644
          command_list.D3DSetComputeRoot32BitConstants(
              kHostDepthStoreRootParameterConstants,
              sizeof(host_depth_store_rectangle_constant) / sizeof(uint32_t),
-@@ -4103,6 +4397,19 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4103,6 +4442,19 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
              offsetof(HostDepthStoreConstants, rectangle) / sizeof(uint32_t));
          command_processor_.SubmitBarriers();
          command_list.D3DDispatch(group_count_x, group_count_y, 1);
@@ -4390,7 +4545,7 @@ index 4dd8332..8a8048b 100644
          MarkEdramBufferModified();
        }
      }
-@@ -4266,8 +4573,6 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4266,8 +4618,6 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
  
    bool transfer_viewport_set = false;
    float pixels_to_ndc_unscaled = 2.0f / float(D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION);
@@ -4399,7 +4554,7 @@ index 4dd8332..8a8048b 100644
  
    TransferRootSignatureIndex last_transfer_root_signature_index =
        TransferRootSignatureIndex::kCount;
-@@ -4287,12 +4592,31 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4287,12 +4637,31 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
      }
  
      const std::vector<Transfer>& current_transfers = render_target_transfers[i];
@@ -4432,7 +4587,7 @@ index 4dd8332..8a8048b 100644
  
      // Late barrier in case there was cross-copying that prevented merging of
      // barriers.
-@@ -4301,6 +4625,51 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4301,6 +4670,51 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
      command_processor_.PushTransitionBarrier(
          dest_d3d12_rt.resource(), dest_d3d12_rt.SetResourceState(dest_state), dest_state);
  
@@ -4484,7 +4639,47 @@ index 4dd8332..8a8048b 100644
      if (!current_transfers.empty()) {
        are_current_command_list_render_targets_valid_ = false;
        if (dest_rt_key.is_depth) {
-@@ -4330,6 +4699,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4323,6 +4737,39 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+       // Gather shader keys and sort to reduce pipeline state and binding
+       // switches. Also gather stencil rectangles to clear if needed.
+       bool need_stencil_bit_draws = dest_rt_key.is_depth && !use_stencil_reference_output_;
++      bool use_stencil_copy = need_stencil_bit_draws &&
++                              REXCVAR_GET(host_render_targets_stencil_copy_transfer) &&
++                              dest_rt_key.msaa_samples == xenos::MsaaSamples::k1X &&
++                              PrepareStencilCopyTexture(dest_d3d12_rt);
++      D3D12_TEXTURE_COPY_LOCATION stencil_buffer_location = {};
++      D3D12_TEXTURE_COPY_LOCATION stencil_dest_location = {};
++      D3D12_TEXTURE_COPY_LOCATION stencil_texture_location = {};
++      if (use_stencil_copy) {
++        // D3D12 depth/stencil copies must cover an entire plane, even at 1x.
++        // Preserve all untouched bytes, including resolve-clear cutouts, by
++        // seeding the R8 RTV through a buffer before updating the rectangles.
++        // Both typeless depth families use one byte per stencil-plane element.
++        const D3D12_RESOURCE_DESC desc = dest_d3d12_rt.resource()->GetDesc();
++        stencil_buffer_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++        auto& footprint = stencil_buffer_location.PlacedFootprint;
++        footprint.Offset = 0;  // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT (512).
++        footprint.Footprint.Format = DXGI_FORMAT_R8_UINT;
++        footprint.Footprint.Width = UINT(desc.Width);
++        footprint.Footprint.Height = desc.Height;
++        footprint.Footprint.Depth = 1;
++        footprint.Footprint.RowPitch = rex::align(
++            UINT(desc.Width), UINT(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT));
++        stencil_buffer_location.pResource = command_processor_.RequestScratchGPUBuffer(
++            footprint.Footprint.RowPitch * desc.Height, D3D12_RESOURCE_STATE_COPY_DEST);
++        use_stencil_copy = stencil_buffer_location.pResource != nullptr;
++        stencil_dest_location.pResource = dest_d3d12_rt.resource();
++        stencil_dest_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        // One mip and one array slice: D3D12CalcSubresource(0, 0, 1, 1, 1).
++        stencil_dest_location.SubresourceIndex = 1;
++        stencil_texture_location.pResource = dest_d3d12_rt.stencil_copy_texture().resource.Get();
++        stencil_texture_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        stencil_texture_location.SubresourceIndex = 0;
++      }
+       current_transfer_invocations_.clear();
+       current_transfer_invocations_.reserve(current_transfers.size()
+                                             << uint32_t(need_stencil_bit_draws));
+@@ -4330,6 +4777,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
        TransferShaderKey new_transfer_shader_key;
        new_transfer_shader_key.dest_msaa_samples = dest_rt_key.msaa_samples;
        new_transfer_shader_key.dest_resource_format = dest_rt_key.resource_format;
@@ -4492,7 +4687,7 @@ index 4dd8332..8a8048b 100644
        uint32_t stencil_clear_rectangle_count = 0;
        for (uint32_t j = 0; j <= uint32_t(need_stencil_bit_draws); ++j) {
          // j == 0 - color or depth.
-@@ -4362,6 +4732,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4362,6 +4810,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
            RenderTargetKey source_rt_key = source_d3d12_rt.key();
            new_transfer_shader_key.source_msaa_samples = source_rt_key.msaa_samples;
            new_transfer_shader_key.source_resource_format = source_rt_key.resource_format;
@@ -4502,7 +4697,72 @@ index 4dd8332..8a8048b 100644
            bool host_depth_source_is_copy = host_depth_source_d3d12_rt == &dest_d3d12_rt;
            new_transfer_shader_key.host_depth_source_is_copy = host_depth_source_is_copy;
            // The host depth copy buffer has only raw samples.
-@@ -4408,6 +4781,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4391,23 +4842,74 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+                                                                     : TransferMode::kColorToColor;
+             }
+           }
++          new_transfer_shader_key.stencil_copy = j && use_stencil_copy;
+           current_transfer_invocations_.emplace_back(transfer, new_transfer_shader_key);
+           if (j) {
+             current_transfer_invocations_.back().transfer.host_depth_source = nullptr;
+           }
+         }
+       }
++      if (use_stencil_copy) {
++        // Preflight every byte-output PSO before suppressing initialization or
++        // any bit draws. Allocation/PSO failure leaves the original path intact.
++        for (const auto& invocation : current_transfer_invocations_) {
++          if (invocation.shader_key.stencil_copy &&
++              !GetOrCreateTransferPipelines(invocation.shader_key)) {
++            use_stencil_copy = false;
++            break;
++          }
++        }
++        if (!use_stencil_copy) {
++          for (auto& invocation : current_transfer_invocations_) {
++            invocation.shader_key.stencil_copy = 0;
++          }
++          command_processor_.ReleaseScratchGPUBuffer(
++              stencil_buffer_location.pResource, D3D12_RESOURCE_STATE_COPY_DEST);
++        }
++      }
+       std::sort(current_transfer_invocations_.begin(), current_transfer_invocations_.end());
+ 
++      if (use_stencil_copy) {
++        auto& scratch = dest_d3d12_rt.stencil_copy_texture();
++        command_list.D3DOMSetRenderTargets(0, nullptr, FALSE, nullptr);
++        command_processor_.PushTransitionBarrier(
++            dest_d3d12_rt.resource(),
++            dest_d3d12_rt.SetResourceState(D3D12_RESOURCE_STATE_COPY_SOURCE),
++            D3D12_RESOURCE_STATE_COPY_SOURCE);
++        command_processor_.PushTransitionBarrier(
++            scratch.resource.Get(), scratch.state, D3D12_RESOURCE_STATE_COPY_DEST);
++        command_processor_.SubmitBarriers();
++        command_list.D3DCopyTextureRegion(
++            &stencil_buffer_location, 0, 0, 0, &stencil_dest_location, nullptr);
++        command_processor_.PushTransitionBarrier(
++            stencil_buffer_location.pResource, D3D12_RESOURCE_STATE_COPY_DEST,
++            D3D12_RESOURCE_STATE_COPY_SOURCE);
++        command_processor_.SubmitBarriers();
++        command_list.D3DCopyTextureRegion(
++            &stencil_texture_location, 0, 0, 0, &stencil_buffer_location, nullptr);
++        command_processor_.PushTransitionBarrier(
++            scratch.resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
++            D3D12_RESOURCE_STATE_RENDER_TARGET);
++        scratch.state = D3D12_RESOURCE_STATE_RENDER_TARGET;
++        command_processor_.PushTransitionBarrier(
++            dest_d3d12_rt.resource(),
++            dest_d3d12_rt.SetResourceState(D3D12_RESOURCE_STATE_DEPTH_WRITE),
++            D3D12_RESOURCE_STATE_DEPTH_WRITE);
++      }
++
+       // Clear the stencil to 0 where it will be loaded - will be setting the
+       // bits that need to be 1 by discarding samples. Clearing everything here
+       // to reduce context switches internally in the driver if clear causes
+       // them.
+-      if (stencil_clear_rectangle_count) {
++      if (stencil_clear_rectangle_count && !use_stencil_copy) {
+         command_processor_.SubmitBarriers();
          D3D12_RECT* stencil_clear_rect_write_ptr = command_list.ClearDepthStencilViewAllocatedRects(
              dest_d3d12_rt.descriptor_draw().GetHandle(), D3D12_CLEAR_FLAG_STENCIL, 0.0f, 0,
              stencil_clear_rectangle_count);
@@ -4513,7 +4773,7 @@ index 4dd8332..8a8048b 100644
          assert_not_null(stencil_clear_rect_write_ptr);
          for (const Transfer& transfer : current_transfers) {
            Transfer::Rectangle transfer_stencil_clear_rectangles[Transfer::kMaxRectanglesWithCutout];
-@@ -4417,16 +4794,23 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4417,16 +4919,23 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
            for (uint32_t j = 0; j < transfer_stencil_clear_rectangle_count; ++j) {
              const Transfer::Rectangle& stencil_clear_rectangle =
                  transfer_stencil_clear_rectangles[j];
@@ -4541,7 +4801,7 @@ index 4dd8332..8a8048b 100644
              ++stencil_clear_rect_write_ptr;
            }
          }
-@@ -4526,6 +4910,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4526,6 +5035,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
          if (!transfer_rectangle_write_ptr) {
            continue;
          }
@@ -4549,7 +4809,7 @@ index 4dd8332..8a8048b 100644
          for (auto it_merged = it_merged_first; it_merged <= it_merged_last; ++it_merged) {
            Transfer::Rectangle transfer_invocation_rectangles[Transfer::kMaxRectanglesWithCutout];
            uint32_t transfer_invocation_rectangle_count = it_merged->transfer.GetRectangles(
-@@ -4534,6 +4919,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4534,6 +5044,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
            assert_not_zero(transfer_invocation_rectangle_count);
            for (uint32_t j = 0; j < transfer_invocation_rectangle_count; ++j) {
              const Transfer::Rectangle& transfer_rectangle = transfer_invocation_rectangles[j];
@@ -4561,18 +4821,38 @@ index 4dd8332..8a8048b 100644
              float transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
              float transfer_rectangle_y0 = 1.0f - transfer_rectangle.y_pixels * pixels_to_ndc_y;
              float transfer_rectangle_x1 =
-@@ -4730,6 +5120,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4728,18 +5243,130 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+           transfer_root_parameters_set |= kTransferUsedRootParameterColorSRVBit;
+         }
  
-         // Draw the transfer rectangles.
+-        // Draw the transfer rectangles.
++        // Draw the transfer rectangles. Byte reconstruction has no DSV bound;
++        // the ordinary depth draw still writes SV_Depth to the original target.
++        if (use_stencil_copy) {
++          if (transfer_shader_key.stencil_copy) {
++            D3D12_CPU_DESCRIPTOR_HANDLE rtv =
++                dest_d3d12_rt.stencil_copy_texture().descriptor.GetHandle();
++            command_list.D3DOMSetRenderTargets(1, &rtv, FALSE, nullptr);
++          } else {
++            D3D12_CPU_DESCRIPTOR_HANDLE dsv = dest_d3d12_rt.descriptor_draw().GetHandle();
++            command_list.D3DOMSetRenderTargets(0, nullptr, FALSE, &dsv);
++          }
++        }
          command_processor_.SubmitBarriers();
+-        for (uint32_t j = 0; j <= uint32_t(is_stencil_bit) * 7; ++j) {
 +        if (transfer_metrics && !is_stencil_bit) {
 +          transfer_metrics->transfers +=
 +              uint64_t(std::distance(it_merged_first, it_merged_last)) + 1;
 +        }
-         for (uint32_t j = 0; j <= uint32_t(is_stencil_bit) * 7; ++j) {
++        for (uint32_t j = 0;
++             j <= uint32_t(is_stencil_bit && !transfer_shader_key.stencil_copy) * 7; ++j) {
            if (is_stencil_bit) {
-             uint32_t transfer_stencil_bit = uint32_t(1) << j;
-@@ -4739,7 +5133,59 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+-            uint32_t transfer_stencil_bit = uint32_t(1) << j;
++            uint32_t transfer_stencil_bit = transfer_shader_key.stencil_copy
++                                                ? UINT8_MAX : uint32_t(1) << j;
+             command_list.D3DSetGraphicsRoot32BitConstants(
+                 rex::bit_count(transfer_root_parameters_used &
+                                (kTransferUsedRootParameterStencilMaskConstantBit - 1)),
                  sizeof(transfer_stencil_bit) / sizeof(uint32_t), &transfer_stencil_bit, 0);
            }
            command_processor_.SetExternalPipeline(transfer_pipelines[j]);
@@ -4606,12 +4886,13 @@ index 4dd8332..8a8048b 100644
 +                  dest_rt_key.base_tiles, dest_pitch_tiles, dest_rt_key.msaa_samples,
 +                  dest_is_64bpp, rectangles, resolve_clear_rectangle);
 +              REXGPU_INFO("FM4 RT order: n={} frame={} op=transfer mode={} iteration={} "
-+                          "tiles=[{},{}) src={} dst={} host_depth={} rectangles={}",
++                          "tiles=[{},{}) src={} dst={} host_depth={} rectangles={} stencil_copy={}",
 +                          order, fm4::frame_metrics::Get().swaps,
 +                          uint32_t(traced->shader_key.mode), j, transfer.start_tiles, transfer.end_tiles,
 +                          transfer.source->key().GetDebugName(), dest_rt_key.GetDebugName(),
 +                          transfer.host_depth_source ? transfer.host_depth_source->key().GetDebugName()
-+                                                     : std::string("none"), count);
++                                                     : std::string("none"), count,
++                          transfer_shader_key.stencil_copy != 0);
 +              for (uint32_t r = 0; r < count; ++r) {
 +                const auto& rect = rectangles[r];
 +                REXGPU_INFO("FM4 RT order rect: n={} index={} guest={},{},{},{}", order, r,
@@ -4623,16 +4904,58 @@ index 4dd8332..8a8048b 100644
            command_list.D3DDrawInstanced(transfer_vertex_count, 1, 0, 0);
 +          if (transfer_metrics) {
 +            ++transfer_metrics->draws;
++            if (transfer_shader_key.stencil_copy) {
++              ++transfer_metrics->stencil_copy_draws;
++              transfer_metrics->stencil_draws_avoided += 8;
++            }
 +            transfer_metrics->host_pixels += transfer_host_pixels;
 +            // 2x MSAA may use a 4-sample resource with mask 0b1001;
 +            // count the two written samples, not its unused storage samples.
 +            transfer_metrics->host_samples +=
 +                transfer_host_pixels * (uint32_t(1) << uint32_t(dest_rt_key.msaa_samples));
 +          }
++        }
++      }
++      if (use_stencil_copy) {
++        auto& scratch = dest_d3d12_rt.stencil_copy_texture();
++        command_list.D3DOMSetRenderTargets(0, nullptr, FALSE, nullptr);
++        command_processor_.PushTransitionBarrier(
++            scratch.resource.Get(), scratch.state, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        scratch.state = D3D12_RESOURCE_STATE_COPY_SOURCE;
++        command_processor_.PushTransitionBarrier(
++            stencil_buffer_location.pResource, D3D12_RESOURCE_STATE_COPY_SOURCE,
++            D3D12_RESOURCE_STATE_COPY_DEST);
++        command_processor_.PushTransitionBarrier(
++            dest_d3d12_rt.resource(),
++            dest_d3d12_rt.SetResourceState(D3D12_RESOURCE_STATE_COPY_DEST),
++            D3D12_RESOURCE_STATE_COPY_DEST);
++        command_processor_.SubmitBarriers();
++        command_list.D3DCopyTextureRegion(
++            &stencil_buffer_location, 0, 0, 0, &stencil_texture_location, nullptr);
++        command_processor_.PushTransitionBarrier(
++            stencil_buffer_location.pResource, D3D12_RESOURCE_STATE_COPY_DEST,
++            D3D12_RESOURCE_STATE_COPY_SOURCE);
++        command_processor_.SubmitBarriers();
++        // Copy plane 1 only. Plane 0 retains the existing depth transfer result.
++        command_list.D3DCopyTextureRegion(
++            &stencil_dest_location, 0, 0, 0, &stencil_buffer_location, nullptr);
++        command_processor_.PushTransitionBarrier(
++            dest_d3d12_rt.resource(),
++            dest_d3d12_rt.SetResourceState(D3D12_RESOURCE_STATE_DEPTH_WRITE),
++            D3D12_RESOURCE_STATE_DEPTH_WRITE);
++        command_processor_.ReleaseScratchGPUBuffer(
++            stencil_buffer_location.pResource, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        command_processor_.SubmitBarriers();
++        if (transfer_metrics) {
++          ++transfer_metrics->stencil_copy_planes;
++        }
++        if (uint64_t order = fm4::frame_metrics::NextRTOrderEvent()) {
++          REXGPU_INFO("FM4 RT order: n={} frame={} op=stencil_copy dst={} plane=1",
++                      order, fm4::frame_metrics::Get().swaps, dest_rt_key.GetDebugName());
          }
        }
      }
-@@ -4768,6 +5214,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4768,6 +5395,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                                                D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
                                                depth_host_clear_value, UINT(clear_value) & 0xFF, 1,
                                                &clear_rect);
@@ -4650,7 +4973,7 @@ index 4dd8332..8a8048b 100644
        } else {
          float color_clear_value[4] = {};
          bool clear_via_drawing = false;
-@@ -4869,6 +5326,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4869,6 +5507,9 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                xenos::ColorRenderTargetFormat::k_32_32_FLOAT)][size_t(dest_rt_key.msaa_samples)]);
            command_processor_.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
            command_list.D3DDrawInstanced(3, 1, 0, 0);
@@ -4660,7 +4983,7 @@ index 4dd8332..8a8048b 100644
          } else {
            command_processor_.SubmitBarriers();
            command_list.D3DClearRenderTargetView(
-@@ -4876,6 +5336,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+@@ -4876,6 +5517,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
                    ? dest_d3d12_rt.descriptor_load_separate().GetHandle()
                    : dest_d3d12_rt.descriptor_draw().GetHandle(),
                color_clear_value, 1, &clear_rect);
@@ -4678,7 +5001,7 @@ index 4dd8332..8a8048b 100644
          }
        }
      }
-@@ -5266,8 +5737,8 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
+@@ -5266,8 +5918,8 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
    // fits in it, while 80x16 doesn't.
    a.OpDclThreadGroup(40, 16, 1);
  
@@ -4689,7 +5012,7 @@ index 4dd8332..8a8048b 100644
  
    // For now, as the exact addressing in 64bpp render targets relatively to
    // 32bpp is unknown, treating 64bpp tiles as storing 40x16 samples rather than
-@@ -5483,6 +5954,17 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
+@@ -5483,6 +6135,17 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
      // r0.z = sample offset in the EDRAM
      // r0.w = sample index within the source pixel if stencil is needed
      // r1 = source texel value
@@ -4707,7 +5030,7 @@ index 4dd8332..8a8048b 100644
      a.OpLdMS(dxbc::Dest::R(1, (1 << source_component_count) - 1), source_address_src, 0b0011,
               dxbc::Src::T(0, 0), dxbc::Src::R(0, dxbc::Src::kWWWW));
      if (key.is_depth) {
-@@ -5510,6 +5992,17 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
+@@ -5510,6 +6173,17 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(DumpPipelin
      // r0.z = sample offset in the EDRAM
      // r0.w = LOD for the texture load (zero)
      // r1 = source texel value
@@ -4725,7 +5048,7 @@ index 4dd8332..8a8048b 100644
      a.OpLd(dxbc::Dest::R(1, (1 << source_component_count) - 1), source_address_src, 0b1011,
             dxbc::Src::T(0, 0));
      if (key.is_depth) {
-@@ -5756,6 +6249,7 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
+@@ -5756,6 +6430,7 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
      dump_pipeline_key.msaa_samples = render_target->key().msaa_samples;
      dump_pipeline_key.resource_format = render_target->key().resource_format;
      dump_pipeline_key.is_depth = render_target->key().is_depth;
@@ -4733,7 +5056,7 @@ index 4dd8332..8a8048b 100644
      if (!GetOrCreateDumpPipeline(dump_pipeline_key)) {
        return false;
      }
-@@ -5774,7 +6268,8 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
+@@ -5774,7 +6449,8 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
  }
  
  bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used,
@@ -4743,7 +5066,7 @@ index 4dd8332..8a8048b 100644
    assert_true(GetPath() == Path::kHostRenderTargets);
  
    GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
-@@ -5804,6 +6299,9 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+@@ -5804,6 +6480,9 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
          d3d12_rt.resource(),
          d3d12_rt.SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -4753,7 +5076,7 @@ index 4dd8332..8a8048b 100644
      if (d3d12_rt.temporary_sort_index() == UINT32_MAX) {
        d3d12_rt.SetTemporarySortIndex(rt_sort_index++);
      }
-@@ -5822,6 +6320,8 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+@@ -5822,6 +6501,8 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
      pipeline_key.msaa_samples = rt_key.msaa_samples;
      pipeline_key.resource_format = rt_key.resource_format;
      pipeline_key.is_depth = rt_key.is_depth;
@@ -4762,7 +5085,7 @@ index 4dd8332..8a8048b 100644
      dump_invocations_.emplace_back(rectangle, pipeline_key);
    }
    // 32bpp and 64bpp.
-@@ -5980,9 +6480,10 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+@@ -5980,9 +6661,10 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
        command_processor_.SubmitBarriers();
        // Processing 40 x 16 x scale samples per dispatch (a 32bpp tile in two
        // dispatches at 1x1 scale, 64bpp in one dispatch).
@@ -5563,10 +5886,10 @@ index 243a4f9..7c5de51 100644
  
  void GraphicsSystem::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
 diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
-index 8881530..6f6ded4 100644
+index 8881530..31e93be 100644
 --- a/src/graphics/pipeline/render_target/cache.cpp
 +++ b/src/graphics/pipeline/render_target/cache.cpp
-@@ -31,6 +31,20 @@
+@@ -31,6 +31,24 @@
  REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                      "Clamp MRT EDRAM used range to minimum");
  
@@ -5578,6 +5901,10 @@ index 8881530..6f6ded4 100644
 +                    "With host render targets, let a render target's estimated EDRAM range wrap "
 +                    "past the end of the EDRAM onto other render targets");
 +
++REXCVAR_DEFINE_BOOL(host_render_targets_scissor_ownership, false, "GPU",
++                    "With collapsed MSAA and non-wrapping host targets, defer ownership outside "
++                    "the draw scissor, including color and mixed color/depth draws");
++
 +REXCVAR_DEFINE_BOOL(host_render_targets_depth_scissor_ownership, false, "GPU",
 +                    "Limit non-wrapping depth-only host render target ownership to scissor tiles");
 +
@@ -5587,7 +5914,7 @@ index 8881530..6f6ded4 100644
  REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend, true, "GPU",
                      "Execute unclipped draw VS on CPU for PSI render backend");
  
-@@ -411,137 +425,178 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -411,137 +429,178 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                                 reg::RB_DEPTHCONTROL normalized_depth_control,
                                 uint32_t normalized_color_mask, const Shader& vertex_shader) {
    const RegisterFile& regs = register_file();
@@ -5795,10 +6122,10 @@ index 8881530..6f6ded4 100644
 -      resource_formats[rt_bit_index] = uint32_t(color_resource_format);
      }
 -  }
- 
+-
 -  uint32_t rts_remaining;
 -  uint32_t rt_index;
--
+ 
 -  // Eliminate other bound render targets if their EDRAM base conflicts with
 -  // another render target - it's an error in most host implementations to bind
 -  // the same render target into multiple slots, also the behavior would be
@@ -5883,7 +6210,7 @@ index 8881530..6f6ded4 100644
    // Clear ownership transfers before adding any.
    if (!interlock_barrier_only) {
      for (size_t i = 0; i < rex::countof(last_update_transfers_); ++i) {
-@@ -561,7 +616,8 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -561,7 +620,8 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
          }
          RenderTargetKey rt_key = render_target->key();
          if (rt_key.pitch_tiles_at_32bpp != pitch_tiles_at_32bpp ||
@@ -5893,7 +6220,7 @@ index 8881530..6f6ded4 100644
            are_accumulated_render_targets_valid_ = false;
            break;
          }
-@@ -577,7 +633,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -577,7 +637,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // Estimate height used by render targets (for color for writes, for depth /
    // stencil for both reads and writes) from various sources.
    uint32_t height_used =
@@ -5902,7 +6229,7 @@ index 8881530..6f6ded4 100644
                 draw_extent_estimator_.EstimateMaxY(
                     interlock_barrier_only
                         ? REXCVAR_GET(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend)
-@@ -646,9 +702,10 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -646,9 +706,10 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
      RenderTargetKey& rt_key = rt_keys[rt_bit_index];
      rt_key.base_tiles = rt_base;
      rt_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
@@ -5914,7 +6241,7 @@ index 8881530..6f6ded4 100644
      if (!interlock_barrier_only) {
        RenderTarget* render_target = GetOrCreateRenderTarget(rt_key);
        if (!render_target) {
-@@ -668,6 +725,19 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -668,6 +729,19 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                                         rt_base);
    }
  
@@ -5934,15 +6261,19 @@ index 8881530..6f6ded4 100644
    if (interlock_barrier_only) {
      // Because a full pixel shader interlock barrier may clear the ownership map
      // (since it flushes all previous writes, and there's no need for another
-@@ -693,9 +763,103 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -693,9 +767,110 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
    // draw with whatever contents currently are in the render target in this
    // case).
  
-+  // Depth / stencil can only be accessed inside the effective draw scissor.
-+  // Preserve ownership outside it rather than transferring entire rows from
-+  // the surface origin. Transfer whole boundary tiles to preserve samples not
-+  // touched by this draw, including stencil and host float depth. Do not use
-+  // this for wrapped addressing or simultaneous color / depth attachments.
++  // Draws can only access attachments inside the effective scissor. Retain
++  // the old owners outside it so a later draw or resolve can still load their
++  // data. This also avoids color transfers for untouched row prefixes in FM4.
++  // The general path is opt-in for collapsed MSAA and non-wrapping ranges;
++  // simultaneous attachments already have disjoint ranges above. Keep whole
++  // boundary tiles, including unwritten color channels, stencil and host depth.
++  bool scissor_ownership =
++      !interlock_barrier_only && REXCVAR_GET(host_render_targets_scissor_ownership) &&
++      IsHostRenderTargetMsaaCollapsed() && !REXCVAR_GET(host_render_targets_edram_wrap);
 +  bool depth_scissor_ownership =
 +      !interlock_barrier_only && (REXCVAR_GET(host_render_targets_depth_scissor_ownership) ||
 +                                 REXCVAR_GET(host_render_targets_depth_clear_elision)) &&
@@ -5950,7 +6281,7 @@ index 8881530..6f6ded4 100644
 +      regs.Get<reg::RB_MODECONTROL>().edram_mode == xenos::EdramMode::kDepthOnly &&
 +      !REXCVAR_GET(host_render_targets_edram_wrap);
 +  draw_util::Scissor depth_scissor;
-+  if (depth_scissor_ownership) {
++  if (scissor_ownership || depth_scissor_ownership) {
 +    // Same window offset, screen scissor and pitch clamp as host rasterization.
 +    draw_util::GetScissor(regs, depth_scissor);
 +  }
@@ -5974,9 +6305,11 @@ index 8881530..6f6ded4 100644
    for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
      const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
      uint32_t rt_bit_index = rt_base_index.second;
-+    if (depth_scissor_ownership) {
-+      uint32_t tile_width =
-+          xenos::kEdramTileWidthSamples >> uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
++    if (scissor_ownership || depth_scissor_ownership) {
++      uint32_t rt_pitch_tiles = rt_keys[rt_bit_index].GetPitchTiles();
++      uint32_t tile_width = xenos::kEdramTileWidthSamples >>
++                            (uint32_t(msaa_samples >= xenos::MsaaSamples::k4X) +
++                             uint32_t(rt_keys[rt_bit_index].Is64bpp()));
 +      uint32_t tile_height =
 +          xenos::kEdramTileHeightSamples >> uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
 +      // Round inward: samples outside the rectangle or the scissor must retain
@@ -5997,23 +6330,24 @@ index 8881530..6f6ded4 100644
 +      uint32_t y_end =
 +          (std::min(height_used, depth_scissor.offset[1] + depth_scissor.extent[1]) + tile_height - 1) /
 +          tile_height;
-+      if (!depth_scissor.extent[0] || !depth_scissor.extent[1] || x_begin >= x_end) {
++      if (!depth_scissor.extent[0] || !depth_scissor.extent[1] || x_begin >= x_end ||
++          depth_scissor.offset[1] >= height_used || y_begin >= y_end) {
 +        continue;
 +      }
 +      // Keep full-width rows contiguous, otherwise leave the intervening
 +      // columns with their existing owners. Clamp every span to the original
 +      // conservative range, including a partial row at the EDRAM end.
 +      for (uint32_t y = y_begin; y < y_end; ++y) {
-+        uint32_t start = y * pitch_tiles_at_32bpp + x_begin;
++        uint32_t start = y * rt_pitch_tiles + x_begin;
 +        if (start >= rt_lengths_tiles[i]) {
 +          break;
 +        }
-+        uint32_t end = std::min(y * pitch_tiles_at_32bpp + x_end, rt_lengths_tiles[i]);
-+        if (!depth_overwrite && !x_begin && x_end == pitch_tiles_at_32bpp) {
-+          end = std::min(y_end * pitch_tiles_at_32bpp, rt_lengths_tiles[i]);
++        uint32_t end = std::min(y * rt_pitch_tiles + x_end, rt_lengths_tiles[i]);
++        if (!depth_overwrite && !x_begin && x_end == rt_pitch_tiles) {
++          end = std::min(y_end * rt_pitch_tiles, rt_lengths_tiles[i]);
 +        }
-+        uint32_t discard_start = std::max(start, y * pitch_tiles_at_32bpp + overwrite_x_begin);
-+        uint32_t discard_end = std::min(end, y * pitch_tiles_at_32bpp + overwrite_x_end);
++        uint32_t discard_start = std::max(start, y * rt_pitch_tiles + overwrite_x_begin);
++        uint32_t discard_end = std::min(end, y * rt_pitch_tiles + overwrite_x_end);
 +        if (depth_overwrite && y >= overwrite_y_begin && y < overwrite_y_end &&
 +            discard_start < discard_end) {
 +          ChangeOwnership(rt_keys[rt_bit_index], start, discard_start - start,
@@ -6029,7 +6363,7 @@ index 8881530..6f6ded4 100644
 +          ChangeOwnership(rt_keys[rt_bit_index], start, end - start,
 +                          &last_update_transfers_[rt_bit_index]);
 +        }
-+        if (!depth_overwrite && !x_begin && x_end == pitch_tiles_at_32bpp) {
++        if (!depth_overwrite && !x_begin && x_end == rt_pitch_tiles) {
 +          break;
 +        }
 +      }
@@ -6038,7 +6372,7 @@ index 8881530..6f6ded4 100644
      ChangeOwnership(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i],
                      interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index]);
    }
-@@ -738,7 +902,8 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
+@@ -738,7 +913,8 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
        } else {
          RenderTargetKey accumulated_rt_key = accumulated_rt->key();
          if (accumulated_rt_key.pitch_tiles_at_32bpp != pitch_tiles_at_32bpp ||
@@ -6048,7 +6382,7 @@ index 8881530..6f6ded4 100644
            // The previously bound render target is incompatible with the
            // current surface info.
            are_accumulated_render_targets_valid_ = false;
-@@ -797,8 +962,45 @@ uint32_t RenderTargetCache::GetLastUpdateBoundRenderTargets(
+@@ -797,8 +973,45 @@ uint32_t RenderTargetCache::GetLastUpdateBoundRenderTargets(
    return rts_used;
  }
  
@@ -6095,7 +6429,7 @@ index 8881530..6f6ded4 100644
    if (!pitch_tiles_at_32bpp) {
      return 0;
    }
-@@ -810,12 +1012,16 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+@@ -810,12 +1023,16 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
    static_assert(!(xenos::kTexture2DCubeMaxWidthHeight % xenos::kEdramTileHeightSamples),
                  "Maximum guest render target height is assumed to always be a multiple "
                  "of an EDRAM tile height");
@@ -6115,7 +6449,7 @@ index 8881530..6f6ded4 100644
    assert_not_zero(tile_rows);
    return tile_rows * (xenos::kEdramTileHeightSamples >> msaa_samples_y_log2);
  }
-@@ -823,7 +1029,7 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
+@@ -823,7 +1040,7 @@ uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
  void RenderTargetCache::GetHostDepthStoreRectangleInfo(
      const Transfer::Rectangle& transfer_rectangle, xenos::MsaaSamples msaa_samples,
      HostDepthStoreRectangleConstant& rectangle_constant_out, uint32_t& group_count_x_out,
@@ -6124,7 +6458,7 @@ index 8881530..6f6ded4 100644
    // Initialize to all bits zeroed.
    HostDepthStoreRectangleConstant rectangle_constant;
    // 8 pixels is the resolve granularity, both clearing and tile size are
-@@ -838,9 +1044,9 @@ void RenderTargetCache::GetHostDepthStoreRectangleInfo(
+@@ -838,9 +1055,9 @@ void RenderTargetCache::GetHostDepthStoreRectangleInfo(
    rectangle_constant.width_pixels_div_8_minus_1 = (transfer_rectangle.width_pixels >> 3) - 1;
    rectangle_constant_out = rectangle_constant;
    // 1 thread group = 64x8 host samples.
@@ -6136,7 +6470,7 @@ index 8881530..6f6ded4 100644
                            << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X);
    group_count_x_out = (transfer_rectangle.width_pixels * pixel_size_x + 63) >> 6;
    group_count_y_out = (transfer_rectangle.height_pixels * pixel_size_y) >> 3;
-@@ -990,7 +1196,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+@@ -990,7 +1207,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
    }
    uint32_t pitch_pixels =
        pitch_tiles_at_32bpp * (xenos::kEdramTileWidthSamples >> msaa_samples_x_log2);
@@ -6147,7 +6481,7 @@ index 8881530..6f6ded4 100644
    uint32_t max_render_target_width = GetMaxRenderTargetWidth();
    if (pitch_pixels_scaled > max_render_target_width) {
      // TODO(Triang3l): If really needed for some game on some device, clamp the
-@@ -1002,7 +1210,14 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+@@ -1002,7 +1221,14 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
      return false;
    }
  
@@ -6163,7 +6497,7 @@ index 8881530..6f6ded4 100644
    uint32_t base_offset_rows_at_32bpp = base_offset_tiles_at_32bpp / pitch_tiles_at_32bpp;
    Transfer::Rectangle clear_rectangle;
    clear_rectangle.x_pixels =
-@@ -1087,8 +1302,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+@@ -1087,8 +1313,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
    if (depth_clear_length_tiles) {
      depth_render_target_key.base_tiles = resolve_info.depth_original_base;
      depth_render_target_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
@@ -6174,7 +6508,7 @@ index 8881530..6f6ded4 100644
      depth_render_target_key.resource_format = resolve_info.depth_edram_info.format;
      depth_render_target = GetOrCreateRenderTarget(depth_render_target_key);
      if (!depth_render_target) {
-@@ -1102,7 +1318,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+@@ -1102,7 +1329,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
    if (color_clear_length_tiles) {
      color_render_target_key.base_tiles = resolve_info.color_original_base;
      color_render_target_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
@@ -6183,7 +6517,7 @@ index 8881530..6f6ded4 100644
      color_render_target_key.is_depth = 0;
      color_render_target_key.resource_format = uint32_t(GetColorResourceFormat(
          xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format)));
-@@ -1118,6 +1334,14 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
+@@ -1118,6 +1345,14 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
      return false;
    }
  

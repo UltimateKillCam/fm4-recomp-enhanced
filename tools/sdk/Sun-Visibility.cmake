@@ -1,4 +1,4 @@
-# Sun visibility from the ROV EDRAM. Modified 2026-10-20. GPL-3.0-only.
+# Sun visibility from the ROV EDRAM. Modified 2026-10-24. GPL-3.0-only.
 # Applied as a build-local edit of the generated Gpu-Completion overlay.
 # FM4's only occlusion queries are a sun-disc visibility test for each predicated-tiling band:
 # a BEGIN report (sample address ending 0x20), one depth-only sun-disc draw, and an END report
@@ -32,6 +32,9 @@ function(fm4_sun_visibility)
 
   # 1. Render target cache: three small public helpers (no layout change).
   set(fm4_header_out "${fm4_root}/include/rex/graphics/d3d12/render_target_cache.h")
+  # Regenerate the copy whenever the SDK header changes.
+  set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/include/rex/graphics/d3d12/render_target_cache.h")
   file(READ "${CMAKE_SOURCE_DIR}/include/rex/graphics/d3d12/render_target_cache.h" fm4_text)
   string(REPLACE "\r\n" "\n" fm4_text "${fm4_text}")
   fm4_swap([=[  void WriteEdramRawUAVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);

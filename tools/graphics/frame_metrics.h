@@ -316,6 +316,7 @@ struct TransferTrace {
     uint64_t depth_store_dispatches = 0, depth_store_samples = 0;
     uint64_t clear_draws = 0, native_clears = 0;
     uint64_t stencil_init_clears = 0, resolve_depth_clears = 0, depth_overwrite_tiles = 0;
+    uint64_t stencil_copy_draws = 0, stencil_copy_planes = 0, stencil_draws_avoided = 0;
   };
   std::map<uint64_t, Stat> stats;
   Stat& ForPass(const std::array<uint32_t, 8>& registers) {
@@ -333,14 +334,16 @@ struct TransferTrace {
             "depth_store_dispatches/frame={:.1f} depth_store_samples/frame={:.1f} "
             "clear_draws/frame={:.1f} native_clears/frame={:.1f} "
             "stencil_init_clears/frame={:.1f} resolve_depth_clears/frame={:.1f} "
-            "depth_overwrite_tiles/frame={:.1f} pitch={} msaa={} "
+            "depth_overwrite_tiles/frame={:.1f} stencil_copy_draws/frame={:.1f} "
+            "stencil_copy_planes/frame={:.1f} stencil_draws_avoided/frame={:.1f} pitch={} msaa={} "
             "c0={:03X}/{} c1={:03X}/{} c2={:03X}/{} c3={:03X}/{} depth={:03X}/{} mask={:04X} mode={}",
             phase, key, stat.setups / frames, stat.transfers / frames, stat.draws / frames,
             stat.host_pixels / frames, stat.host_samples / frames,
             stat.depth_store_dispatches / frames, stat.depth_store_samples / frames,
             stat.clear_draws / frames, stat.native_clears / frames,
             stat.stencil_init_clears / frames, stat.resolve_depth_clears / frames,
-            stat.depth_overwrite_tiles / frames,
+            stat.depth_overwrite_tiles / frames, stat.stencil_copy_draws / frames,
+            stat.stencil_copy_planes / frames, stat.stencil_draws_avoided / frames,
             r[0] & 0x3FFF, (r[0] >> 16) & 3,
             r[1] & 0xFFF, (r[1] >> 16) & 0xF, r[3] & 0xFFF, (r[3] >> 16) & 0xF,
             r[4] & 0xFFF, (r[4] >> 16) & 0xF, r[5] & 0xFFF, (r[5] >> 16) & 0xF,
