@@ -88,27 +88,31 @@ $scale=Choice $graphics 'Render resolution' 272 @('Automatic','1280 × 720','256
 $scaleHint=Hint $graphics $scale '' 304
 $renderSummary=Label $graphics '' 32 330 758
 $renderSummary.Font=[Fm4Ui.Palette]::Make(11.5,$true)
+$frameRates=@(60,120,144,165,240)
+$frameRateValue=if($settings.ContainsKey('frame_rate_limit')){[int]$settings.frame_rate_limit}else{60}
+$frameRate=Choice $graphics 'Frame rate limit' 354 @('60','120','144','165','240') ([Array]::IndexOf($frameRates,$frameRateValue))
+$null=Hint $graphics $frameRate 'Above 60 is experimental.' 386
 
-$null=Add-Fm4Section $graphics 'DLSS 5 Neural Rendering' 372
-$nr=Check $graphics 'Enable Neural Rendering (experimental)' 408 ([bool]$settings.neural_rendering)
-$null=Hint $graphics $nr 'Relights the image on NVIDIA RTX cards.' 436 52
+$null=Add-Fm4Section $graphics 'DLSS 5 Neural Rendering' 414
+$nr=Check $graphics 'Enable Neural Rendering (experimental)' 450 ([bool]$settings.neural_rendering)
+$null=Hint $graphics $nr 'Relights the image on NVIDIA RTX cards.' 478 52
 $neuralPaths=@('auto','official','community')
 $neuralPathValue=if($settings.ContainsKey('neural_path') -and $settings.neural_path){[string]$settings.neural_path}else{'auto'}
-$neuralPath=Choice $graphics 'Compatibility' 466 @('Automatic','NVIDIA (RTX 50)','Community (RTX 40)') ([Array]::IndexOf($neuralPaths,$neuralPathValue))
-$pathStatus=Hint $graphics $null '' 498 32
-$pathWarning=Hint $graphics $null '' 520 32
-$passes=Number $graphics 'Passes' 552 ([int]$settings.neural_passes) 1 3
-$strength=Number $graphics 'Strength (%)' 552 ([decimal]$settings.neural_strength*100) 0 100 650 430 200
-$preset=Choice $graphics 'Model preset' 590 @('Automatic','1','2','3') ([int]$settings.neural_preset) $fieldX 110
-$style=Choice $graphics 'Style' 590 @('Standard','Natural','Cinematic') ([int]$settings.neural_style) 650 110 430 200
-$null=Hint $graphics $passes 'Extra passes take more GPU time.' 622
+$neuralPath=Choice $graphics 'Compatibility' 508 @('Automatic','NVIDIA (RTX 50)','Community (RTX 40)') ([Array]::IndexOf($neuralPaths,$neuralPathValue))
+$pathStatus=Hint $graphics $null '' 540 32
+$pathWarning=Hint $graphics $null '' 562 32
+$passes=Number $graphics 'Passes' 594 ([int]$settings.neural_passes) 1 3
+$strength=Number $graphics 'Strength (%)' 594 ([decimal]$settings.neural_strength*100) 0 100 650 430 200
+$preset=Choice $graphics 'Model preset' 632 @('Automatic','1','2','3') ([int]$settings.neural_preset) $fieldX 110
+$style=Choice $graphics 'Style' 632 @('Standard','Natural','Cinematic') ([int]$settings.neural_style) 650 110 430 200
+$null=Hint $graphics $passes 'Extra passes take more GPU time.' 664
 $nrRuntimeValue=if($settings.neural_runtime_folder){[string]$settings.neural_runtime_folder}else{'.local/neural-runtime'}
-$nrRuntimeFolder=Text $graphics 'Runtime folder' 652 $nrRuntimeValue 330
-$nrRuntimeBrowse=Button $graphics 'Choose folder…' 630 651 130
+$nrRuntimeFolder=Text $graphics 'Runtime folder' 694 $nrRuntimeValue 330
+$nrRuntimeBrowse=Button $graphics 'Choose folder…' 630 693 130
 $nrRuntimeBrowse.Add_Click({$dialog=[Windows.Forms.FolderBrowserDialog]::new();try{if($dialog.ShowDialog($form) -eq 'OK'){$nrRuntimeFolder.Text=$dialog.SelectedPath}}finally{$dialog.Dispose()}})
-$nrStatus=Hint $graphics $nrRuntimeFolder '' 684
-$null=Hint $graphics $null 'Requires your own nvngx_dlssnr.dll and nvngx_dlss.dll files.' 706
-$null=Label $graphics '' 32 726 10
+$nrStatus=Hint $graphics $nrRuntimeFolder '' 726
+$null=Hint $graphics $null 'Requires your own nvngx_dlssnr.dll and nvngx_dlss.dll files.' 748
+$null=Label $graphics '' 32 768 10
 
 $textures=New-Tab 'Textures'
 $null=Add-Fm4Section $textures 'Texture pack' 6
@@ -334,6 +338,7 @@ function Read-Controls($baseSettings=$script:settings) {
     $s.forza_plus=Read-Pfp4Controls -Controls $pfpUi -BaseSettings $baseSettings -EditionRoot $root
     # Native modes without Neural Rendering always save internal_scale 0 (true native).
     $s.profile=$profiles[$profile.SelectedIndex];$s.upscaler=$upscalers[$upscaler.SelectedIndex];$s.internal_scale=[int]$render.Internal
+    if($frameRate.SelectedIndex -lt 0){throw 'Choose a frame rate limit.'};$s.frame_rate_limit=[int]$frameRates[$frameRate.SelectedIndex]
     if($s.upscaler -eq 'SSAA'){if($render.Output -ge 3){throw 'Supersampling is unavailable at 3840 × 2160.'};$s.upscaler='Bilinear'}
     $s.gpu_adapter_name=$gpu.Text.Trim();$s.neural_rendering=$nr.Checked;$s.neural_passes=[int]$passes.Value;$s.neural_preset=$preset.SelectedIndex;$s.neural_style=$style.SelectedIndex;$s.neural_strength=[double]$strength.Value/100;$s.neural_runtime_folder=$nrRuntimeFolder.Text.Trim()
     $s.neural_path=$neuralPaths[$neuralPath.SelectedIndex]
@@ -434,7 +439,7 @@ if($SelfTest){
         $uiPfp=Read-Pfp4Controls -Controls $pfpUi -BaseSettings $settings -EditionRoot $root
         $uiJson=$uiPfp|ConvertTo-Json -Depth 12|ConvertFrom-Fm4Json
         if(-not $uiJson.enabled -or $uiJson.mode -ne 'sandbox' -or $uiJson.physics_preset -ne 'custom' -or $uiJson.physics_target_fps -ne 120.5 -or $uiJson.camera_fov.follow_low -ne 71.5 -or $uiJson.camera_fov.driver -ne $null){throw 'PFP4 advanced control values did not survive the JSON round trip.'}
-        if($profile.SelectedIndex -lt 0 -or $upscaler.SelectedIndex -lt 0 -or $scale.SelectedIndex -lt 0 -or $preset.SelectedIndex -lt 0 -or $style.SelectedIndex -lt 0){throw 'An initial settings selection is missing.'}
+        if($profile.SelectedIndex -lt 0 -or $upscaler.SelectedIndex -lt 0 -or $scale.SelectedIndex -lt 0 -or $preset.SelectedIndex -lt 0 -or $style.SelectedIndex -lt 0 -or $frameRate.SelectedIndex -lt 0){throw 'An initial settings selection is missing.'}
         Write-Output "Initial selections: $($profile.Text); $($upscaler.Text); $($scale.Text); $($preset.Text); $($style.Text)."
         Write-Output "Neural Rendering on this PC: $($pathStatus.Text)"
         function Save-PagePreview($page,[string]$name,[int]$scrollY=0){
@@ -516,13 +521,13 @@ if($SelfTest){
         $ffb.Checked=$false;if($gain.Enabled -or $detail.Enabled -or $weight.Enabled -or $centering.Enabled -or $damping.Enabled -or $backend.Enabled){throw 'Force options stayed available with force feedback off.'}
         $ffb.Checked=$true;if(-not $gain.Enabled){throw 'Force options stayed greyed out.'}
         if($PreviewDirectory){Save-PagePreview $graphics 'Graphics-scrolled.png' 404;Save-PagePreview $advanced 'Advanced-scrolled.png' 360}
-        $nr.Checked=$true;$passes.Value=3;$strength.Value=65;$profile.SelectedIndex=2;$upscaler.SelectedIndex=1;$scale.SelectedIndex=2
+        $nr.Checked=$true;$passes.Value=3;$strength.Value=65;$profile.SelectedIndex=2;$upscaler.SelectedIndex=1;$scale.SelectedIndex=2;$frameRate.SelectedIndex=3
         $pfpUi.Enabled.Checked=$false;$pfpUi.Source.Text.Text='missing-but-disabled';$pfpUi.Mode.SelectedIndex=0;$pfpUi.Physics.SelectedIndex=0
         foreach($camera in $pfpUi.Camera){$camera.Inherit.Checked=$true}
         $nrRuntimeFolder.Text='custom-runtime-fixture'
         $adaptive.Checked=$true;$occlusionSamples.Value=750000;$bulkRegisters.Checked=$false;$gpuCompletion.Checked=$false;$cumulativeVisibility.Checked=$false;$completionBoundary.Checked=$false;$primarySubmit.Checked=$true
         $s=Read-Controls
-        if(-not $s.neural_rendering -or $s.neural_passes -ne 3 -or $s.neural_strength -ne .65 -or $s.profile -ne '4K' -or $s.internal_scale -ne 2 -or $s.neural_runtime_folder -ne 'custom-runtime-fixture'){throw 'Graphics control round trip failed.'}
+        if(-not $s.neural_rendering -or $s.neural_passes -ne 3 -or $s.neural_strength -ne .65 -or $s.profile -ne '4K' -or $s.internal_scale -ne 2 -or $s.frame_rate_limit -ne 165 -or $s.neural_runtime_folder -ne 'custom-runtime-fixture'){throw 'Graphics control round trip failed.'}
         $detail.Value=40;$road.Value=55;$weight.Value=320;$centering.Value=10;$damping.Value=150;$forceMode.SelectedIndex=0;$invert.Checked=$true;$rotation.Value=1080;$fullRotation.Checked=$false
         Test-Fm4ControlsPage $controlsUi
         if($PreviewDirectory){$tabs.SelectedTab=$controlsUi.Tab;foreach($nav in $shell.NavButtons){$nav.Selected=($nav.Tag -eq $controlsUi.Tab)};Save-Fm4Preview $form (Join-Path $PreviewDirectory 'Controls-bound.png')}
@@ -534,7 +539,7 @@ if($SelfTest){
         if($serialized.runtime_overrides.gpu_occlusion_query_cumulative_fallback -ne $false){throw 'Cumulative visibility control round trip failed.'}
         if($serialized.runtime_overrides.d3d12_readback_resolve_completion_boundary -ne $false){throw 'GPU completion boundary control round trip failed.'}
         if($serialized.runtime_overrides.d3d12_submit_on_primary_buffer_end -ne $true){throw 'Primary-buffer submit control round trip failed.'}
-        if($serialized.neural_runtime_folder -ne 'custom-runtime-fixture'){throw 'Neural runtime folder JSON round trip failed.'}
+        if($serialized.neural_runtime_folder -ne 'custom-runtime-fixture' -or $serialized.frame_rate_limit -ne 165){throw 'Graphics settings JSON round trip failed.'}
         if($serialized.forza_plus.enabled -or $serialized.forza_plus.source_folder -ne 'missing-but-disabled' -or
             $serialized.forza_plus.prepared_game_folder -ne '.local/forza-plus/assets' -or $serialized.forza_plus.camera_fov.follow_low -ne $null) {throw 'PFP4 disabled settings did not round-trip safely with default path and inherited FOV.'}
         if($script:settings.runtime_overrides.query_occlusion_fake_sample_count -eq 750000){throw 'Reading controls modified the original runtime settings.'}
@@ -554,7 +559,7 @@ if($SelfTest){
             $script:injectSecondCommitFailure=$false
             Save-Controls
             $saved=Get-Content -LiteralPath $script:settingsPath -Raw -Encoding UTF8 | ConvertFrom-Fm4Json
-            if($saved.custom_setting -ne 'edited-while-open' -or $saved.runtime_overrides.custom_runtime_key -ne 29 -or $saved.neural_runtime_folder -ne 'custom-runtime-fixture' -or
+            if($saved.custom_setting -ne 'edited-while-open' -or $saved.runtime_overrides.custom_runtime_key -ne 29 -or $saved.neural_runtime_folder -ne 'custom-runtime-fixture' -or $saved.frame_rate_limit -ne 165 -or
                 $saved.forza_plus.future_launcher_setting -ne 'preserve-me' -or $saved.forza_plus.camera_fov.future_fov_setting -ne 17 -or $saved.forza_plus.source_folder -ne 'missing-but-disabled') {throw 'External settings edits, unknown PFP4 fields or neural runtime folder were not merged and saved.'}
             $beforeFailureSettings=[IO.File]::ReadAllBytes($script:settingsPath)
             $beforeFailureWheel=[IO.File]::ReadAllBytes($script:wheelPath)

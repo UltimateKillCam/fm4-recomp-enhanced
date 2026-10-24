@@ -89,6 +89,9 @@ struct Trace {
   uint64_t constant_calls = 0, constant_skips = 0;
   uint64_t type0_words = 0, type0_constant_words = 0;
   uint64_t bulk_state_words = 0;
+  uint64_t draw_state_hits = 0, pipeline_state_hits = 0;
+  uint64_t shader_state_hits = 0, raster_state_hits = 0;
+  uint64_t system_state_hits = 0, sampler_state_hits = 0;
   std::string phase = "unmarked";
   // Set when Frame() closed a metrics window, for the per-pass GPU report.
   std::string reported_phase;
@@ -117,6 +120,8 @@ struct Trace {
     constant_calls = constant_skips = 0;
     type0_words = type0_constant_words = 0;
     bulk_state_words = 0;
+    draw_state_hits = pipeline_state_hits = 0;
+    shader_state_hits = raster_state_hits = system_state_hits = sampler_state_hits = 0;
   }
   bool ReadPhase() {
     if (const char* directory = std::getenv("FM4_CAPTURE_DIR")) {
@@ -163,7 +168,7 @@ struct Trace {
         "p50_ms={:.2f} p95_ms={:.2f} p99_ms={:.2f} max_ms={:.2f} gpu_thread_cpu_ms={:.2f} "
         "idle_ms={:.2f} commands_ms={:.2f} guest_wait_ms={:.2f} draw_ms={:.2f} resolve_ms={:.2f} submit_ms={:.2f} pipeline_ms={:.2f} record_ms={:.2f} queue_ms={:.2f} fence_cpu_ms={:.2f} gpu_wait_ms={:.2f} swap_ms={:.2f} other_ms={:.2f} "
         "gpu_commands_ms={:.2f} gpu_timed_submits={:.1f} gpu_resolve_ms={:.2f} gpu_timed_resolves={:.1f} "
-        "draws={:.1f} resolves={:.1f} submits={:.1f} waits={:.1f} constant_calls={:.1f} constant_skips={:.1f} type0_words={:.1f} type0_constant_words={:.1f} bulk_state_words={:.1f} system_constants_ms={:.3f} bindings_ms={:.3f} textures_ms={:.3f} primitives_ms={:.3f} camera_ms={:.3f}",
+        "draws={:.1f} resolves={:.1f} submits={:.1f} waits={:.1f} constant_calls={:.1f} constant_skips={:.1f} type0_words={:.1f} type0_constant_words={:.1f} bulk_state_words={:.1f} draw_state_hits={:.1f} pipeline_state_hits={:.1f} shader_state_hits={:.1f} raster_state_hits={:.1f} system_state_hits={:.1f} sampler_state_hits={:.1f} system_constants_ms={:.3f} bindings_ms={:.3f} textures_ms={:.3f} primitives_ms={:.3f} camera_ms={:.3f}",
         phase, width, height, frames.size(), seconds, count / seconds,
         percentile(.5), percentile(.95), percentile(.99), frames.back(),
         cpu >= previous_cpu ? double(cpu - previous_cpu) / 10000.0 / count : 0,
@@ -181,6 +186,9 @@ struct Trace {
         double(constant_calls) / count, double(constant_skips) / count,
         double(type0_words) / count, double(type0_constant_words) / count,
         double(bulk_state_words) / count,
+        double(draw_state_hits) / count, double(pipeline_state_hits) / count,
+        double(shader_state_hits) / count, double(raster_state_hits) / count,
+        double(system_state_hits) / count, double(sampler_state_hits) / count,
         ms[size_t(Stage::Constants)] / count, ms[size_t(Stage::Bindings)] / count,
         ms[size_t(Stage::Textures)] / count, ms[size_t(Stage::Primitives)] / count,
         ms[size_t(Stage::Camera)] / count);
@@ -283,6 +291,65 @@ inline uint64_t PassKey(const uint32_t* registers, size_t count) {
   for (size_t i = 0; i < count; ++i) { hash ^= registers[i]; hash *= 1099511628211ull; }
   return hash;
 }
+// Bounded command-recording order, armed for a named metrics phase. Kept
+// separate from timings: logging must only be used in correctness captures.
+inline uint64_t NextRTOrderEvent() {
+  static const char* phase = std::getenv("FM4_RT_ORDER_PHASE");
+  static const uint64_t limit = [] {
+    const char* value = std::getenv("FM4_RT_ORDER_LIMIT");
+    return value ? std::min<uint64_t>(std::strtoull(value, nullptr, 10), 1000000) : 16384;
+  }();
+  static thread_local uint64_t serial = 0;
+  if (!phase || !Get().enabled || Get().phase != phase || serial >= limit) return 0;
+  return ++serial;
+}
+
+// CPU command counts, independent of timestamp availability and submission
+// fences. One lookup per transfer / resolve-clear setup, no queries or waits.
+// Report all keys, including setups that issued no transfers.
+struct TransferTrace {
+  struct Stat {
+    std::array<uint32_t, 8> registers{};
+    uint64_t setups = 0, transfers = 0, draws = 0;
+    uint64_t host_pixels = 0, host_samples = 0;
+    uint64_t depth_store_dispatches = 0, depth_store_samples = 0;
+    uint64_t clear_draws = 0, native_clears = 0;
+    uint64_t stencil_init_clears = 0, resolve_depth_clears = 0, depth_overwrite_tiles = 0;
+  };
+  std::map<uint64_t, Stat> stats;
+  Stat& ForPass(const std::array<uint32_t, 8>& registers) {
+    auto& stat = stats[PassKey(registers.data(), registers.size())];
+    stat.registers = registers;
+    ++stat.setups;
+    return stat;
+  }
+  void Report(const std::string& phase, double frames) {
+    if (frames > 0) {
+      for (const auto& [key, stat] : stats) {
+        const auto& r = stat.registers;
+        REXGPU_INFO("FM4 RT work: phase={} key={:016X} setups/frame={:.1f} transfers/frame={:.1f} "
+            "transfer_draws/frame={:.1f} host_pixels/frame={:.1f} host_samples/frame={:.1f} "
+            "depth_store_dispatches/frame={:.1f} depth_store_samples/frame={:.1f} "
+            "clear_draws/frame={:.1f} native_clears/frame={:.1f} "
+            "stencil_init_clears/frame={:.1f} resolve_depth_clears/frame={:.1f} "
+            "depth_overwrite_tiles/frame={:.1f} pitch={} msaa={} "
+            "c0={:03X}/{} c1={:03X}/{} c2={:03X}/{} c3={:03X}/{} depth={:03X}/{} mask={:04X} mode={}",
+            phase, key, stat.setups / frames, stat.transfers / frames, stat.draws / frames,
+            stat.host_pixels / frames, stat.host_samples / frames,
+            stat.depth_store_dispatches / frames, stat.depth_store_samples / frames,
+            stat.clear_draws / frames, stat.native_clears / frames,
+            stat.stencil_init_clears / frames, stat.resolve_depth_clears / frames,
+            stat.depth_overwrite_tiles / frames,
+            r[0] & 0x3FFF, (r[0] >> 16) & 3,
+            r[1] & 0xFFF, (r[1] >> 16) & 0xF, r[3] & 0xFFF, (r[3] >> 16) & 0xF,
+            r[4] & 0xFFF, (r[4] >> 16) & 0xF, r[5] & 0xFFF, (r[5] >> 16) & 0xF,
+            r[2] & 0xFFF, (r[2] >> 16) & 1, r[6] & 0xFFFF, r[7] & 7);
+      }
+    }
+    stats.clear();
+  }
+};
+inline TransferTrace& Transfers() { static thread_local TransferTrace trace; return trace; }
 struct PassTrace {
   static constexpr UINT kSlots = 32768;
   static constexpr uint64_t kResolveKey = 0x5245534F4C564531ull;
@@ -428,6 +495,14 @@ struct Scope {
   }
 };
 inline void Frame(uint32_t width, uint32_t height) {
-  if (Get().Frame(width, height)) Passes().Report(Get().reported_phase, Get().reported_frames);
+  if (!Get().enabled) return;
+  const auto previous_window = Get().window;
+  if (Get().Frame(width, height)) {
+    Passes().Report(Get().reported_phase, Get().reported_frames);
+    Transfers().Report(Get().reported_phase, Get().reported_frames);
+  } else if (Get().window != previous_window) {
+    // Discard initialization / phase-change commands with the CPU window.
+    Transfers().stats.clear();
+  }
 }
 }  // namespace fm4::frame_metrics

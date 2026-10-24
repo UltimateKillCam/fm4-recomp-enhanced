@@ -25,3 +25,24 @@ registers = ["r3"]
 name = "Fm4WheelActive"
 address = 0x823A3F78
 registers = ["r3"]
+
+# Before lwz r10,12260(r31): r11 holds the converted interval (0..3),
+# before it is shifted into the flip callback argument. Covers initial state
+# and direct writes as well as sub_826E5F88 requests. No stored-state mutation.
+[[midasm_hook]]
+name = "Fm4PresentInterval"
+address = 0x822B2F6C
+registers = ["r31", "r11"]
+
+# Before cmplwi r11,0, after lbz r11,1348(r28). Optional register-only
+# masking skips the fixed assignment without modifying the settings byte.
+[[midasm_hook]]
+name = "Fm4MeasuredDeltaBranch"
+address = 0x822F77D4
+registers = ["r28", "r11"]
+
+# Common delta store, including mode paths that bypass the fixed-step test.
+[[midasm_hook]]
+name = "Fm4FixedDeltaState"
+address = 0x822F77E8
+registers = ["r28"]

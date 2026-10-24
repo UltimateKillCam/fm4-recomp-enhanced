@@ -19,6 +19,7 @@ the launcher does not change desktop resolution.
 | Native + FSR 1 | Legacy spatial scaling/sharpening path. |
 | Render resolution | Input size for temporal modes or Neural Rendering; Automatic uses the mode's default. The window shows render and output sizes. |
 | GPU adapter | Selects the named adapter; empty uses automatic selection. |
+| Frame rate limit | Sets the emulated display refresh (60-240). Races use measured time, so game speed stays correct above 60; menus run at half the limit. Above 60 is experimental. |
 
 DLSS integration targets Streamline 2.14.16 / DLSS 310.9.16; FSR targets the
 FidelityFX SDK 2.3.0 signed API. Provider selection depends on hardware.
@@ -29,8 +30,8 @@ Vendor SDKs and runtime DLLs are separate dependencies; see their upstream
 
 Temporal modes use scene depth, camera motion, jitter and history rejection.
 Independent object motion and complete HUD separation are unfinished, so moving
-objects, menus and text can show artifacts. Native DLAA is not offered. Higher
-guest timing and frame generation are unfinished; keep the default simulation clock.
+objects, menus and text can show artifacts. Native DLAA is not offered. Frame
+generation is not offered.
 
 ## Textures and content
 
@@ -61,6 +62,15 @@ change renderer synchronization or compatibility and need broader validation.
 | Use readback heap instead of host copies / `readback_heap` | Disables direct host-copy readback. |
 | Submit each GPU completion separately / `d3d12_readback_resolve_completion_boundary` | Flushes at each completion marker; can add submission overhead. |
 | Submit at every command-buffer end / `d3d12_submit_on_primary_buffer_end` | Adds submission boundaries at primary-buffer completion. |
+
+Performance overrides (added 2026-10-24, set under `runtime_overrides`, all default off):
+
+| Override | Effect |
+|---|---|
+| `d3d12_persistent_pipeline_cache` | Keeps translated shaders and pipelines on disk between runs, reducing first-use stutter. |
+| `d3d12_texture_range_reuse` | Reloads only changed texture ranges and reuses unchanged converted textures. |
+| `d3d12_resolve_readback_barrier_batch` | Removes duplicate GPU barriers around render-target copies. |
+| `host_render_targets_depth_scissor_ownership` | Limits depth-only render-target copies to the drawn area. |
 
 Other scalar runtime overrides are stored under `runtime_overrides` in
 `.local/enhancements/settings.json`. Defaults come from

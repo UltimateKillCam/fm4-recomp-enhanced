@@ -1,4 +1,4 @@
-# Page-valid publication overlay. Modified 2026-10-18. GPL-3.0-only.
+# Page-valid publication overlay. Modified 2026-10-24. GPL-3.0-only.
 # Serialize publication with bitmap writers because the staged validity copy,
 # active-buffer exchange, and dirty reset form one shared-memory transaction.
 # The pinned SDK source is read and overlaid only in CMake's build directory.
@@ -13,7 +13,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${fm4_page_valid
 file(READ "${fm4_page_valid_source}" fm4_page_valid_text)
 string(REPLACE "\r\n" "\n" fm4_page_valid_text "${fm4_page_valid_text}")
 string(SHA256 fm4_page_valid_source_sha "${fm4_page_valid_text}")
-if(NOT fm4_page_valid_source_sha STREQUAL "01085c1e24c747e6d3cd98fa11045d2b97de6af4c19132db3b204919b4cced99")
+if(NOT fm4_page_valid_source_sha STREQUAL "d1d04b95c172cc1a8a1b2c1216a62e27e6cd60193f46a38f1ee57ebbf233146f")
   message(FATAL_ERROR "Page-valid overlay source hash does not match reviewed pinned SDK source")
 endif()
 set(fm4_page_valid_anchor "void SharedMemory::SetSystemPageBlocksValidWithGpuDataWritten() {")

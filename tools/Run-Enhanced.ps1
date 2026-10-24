@@ -96,8 +96,12 @@ if(-not $SettingsFile){
     if(-not(Test-Path -LiteralPath $SettingsFile)){$SettingsFile=Join-Path $root 'config/enhanced-settings.json'}
 }
 $settings=Get-Content -LiteralPath $SettingsFile -Raw -Encoding UTF8 | ConvertFrom-Fm4Json
-$knownKeys=@('dlc_folder','forza_plus','profile','internal_scale','upscaler','gpu_adapter_name','texture_pack','texture_mode','enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','runtime_overrides','neural_rendering','neural_passes','neural_preset','neural_style','neural_strength','neural_runtime_folder','neural_path')
+$knownKeys=@('dlc_folder','forza_plus','profile','internal_scale','upscaler','frame_rate_limit','gpu_adapter_name','texture_pack','texture_mode','enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','runtime_overrides','neural_rendering','neural_passes','neural_preset','neural_style','neural_strength','neural_runtime_folder','neural_path')
 foreach($key in $settings.Keys){if($key -notin $knownKeys){throw "Unknown enhanced setting: $key"}}
+if($settings.ContainsKey('frame_rate_limit')){
+    $FrameRateLimit=$settings.frame_rate_limit
+    if(($FrameRateLimit -isnot [int] -and $FrameRateLimit -isnot [long]) -or $FrameRateLimit -notin @(60,120,144,165,240)){throw 'Frame rate limit must be 60, 120, 144, 165 or 240.'}
+}else{$FrameRateLimit=60}
 foreach($key in @('enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','neural_rendering')){
     if($settings.ContainsKey($key) -and $settings[$key] -isnot [bool]){throw "Setting $key must be true or false."}
 }
@@ -279,6 +283,9 @@ function Set-RuntimeValue([string]$key,$value){
 # Fewer, larger GPU submissions: each D3D12 submit that reaches an idle GPU can block for
 # several milliseconds. ~56-59 vs ~36 race FPS with the same rendering on the tested tracks.
 # Both remain overridable through runtime_overrides (Advanced tab).
+Set-RuntimeValue 'video_mode_refresh_rate' $FrameRateLimit
+Set-RuntimeValue 'vblank_frequency_override' $FrameRateLimit
+Write-Host "Frame rate limit: $FrameRateLimit FPS"
 Set-RuntimeValue 'd3d12_readback_resolve_completion_boundary' $false
 Set-RuntimeValue 'd3d12_submit_on_primary_buffer_end' $false
 # Higher resolutions sample sharper mips than FM4's 720p target; a small bias reduces
@@ -488,7 +495,7 @@ if($Background -and ($TraceGraphics -or $CaptureOutput)){
     New-Item -ItemType Directory -Path $captureFolder -Force|Out-Null
     $start.EnvironmentVariables['FM4_CAPTURE_DIR']=$captureFolder
 }
-if($Metrics){$start.EnvironmentVariables['FM4_FRAME_METRICS']='1'}
+if($Metrics){$start.EnvironmentVariables['FM4_FRAME_METRICS']='1';$start.EnvironmentVariables['FM4_SPEED_TRACE']='1'}
 if($TraceInput){$start.EnvironmentVariables['FM4_TRACE_INPUT']='1'}
 if($DumpTextures){
     $dumpFolder=if($TextureDumpFolder){$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($TextureDumpFolder)}else{Join-Path $root '.local/texture-dumps'}

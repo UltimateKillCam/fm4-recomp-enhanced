@@ -2,6 +2,7 @@
   "profile": "Native",
   "internal_scale": 0,
   "upscaler": "Bilinear",
+  "frame_rate_limit": 60,
   "neural_rendering": false,
   "neural_passes": 1,
   "neural_preset": 0,
