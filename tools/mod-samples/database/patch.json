@@ -1,0 +1,3 @@
+[
+  {"table":"List_PartsStrings","where":{"Id":1},"set":{"PartsString":"Example component"},"expect":1}
+]

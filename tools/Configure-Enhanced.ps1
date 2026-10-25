@@ -82,15 +82,16 @@ $upscaler=Choice $graphics 'Rendering' 210 @('Native','DLSS','FSR','Native + CAS
     if($settings.upscaler -eq 'Bilinear' -and $savedOutput -gt 0 -and $savedOutput -lt 3 -and [int]$settings.internal_scale -eq $savedOutput+1 -and -not [bool]$settings.neural_rendering){5}else{[Array]::IndexOf($upscalers,$settings.upscaler)})
 $modeHint=Hint $graphics $upscaler '' 242
 $savedScale=[int]$settings.internal_scale
-$ignoredNativeScale=if($settings.upscaler -notin @('DLSS','FSR') -and -not [bool]$settings.neural_rendering -and $savedScale -ne 0 -and $upscaler.SelectedIndex -ne 5){$savedScale}else{0}
+$liveGraphicsScale=$settings.runtime_overrides -and $settings.runtime_overrides.fm4_live_settings -is [bool] -and $settings.runtime_overrides.fm4_live_settings
+$ignoredNativeScale=if(-not $liveGraphicsScale -and $settings.upscaler -notin @('DLSS','FSR') -and -not [bool]$settings.neural_rendering -and $savedScale -ne 0 -and $upscaler.SelectedIndex -ne 5){$savedScale}else{0}
 if($savedScale -lt 0 -or $savedScale -gt 3){$savedScale=0}
 $scale=Choice $graphics 'Render resolution' 272 @('Automatic','1280 × 720','2560 × 1440','3840 × 2160') $savedScale
 $scaleHint=Hint $graphics $scale '' 304
 $renderSummary=Label $graphics '' 32 330 758
 $renderSummary.Font=[Fm4Ui.Palette]::Make(11.5,$true)
-$frameRates=@(60,120,144,165,240)
+$frameRates=@(60,120,144,165,240,0)
 $frameRateValue=if($settings.ContainsKey('frame_rate_limit')){[int]$settings.frame_rate_limit}else{60}
-$frameRate=Choice $graphics 'Frame rate limit' 354 @('60','120','144','165','240') ([Array]::IndexOf($frameRates,$frameRateValue))
+$frameRate=Choice $graphics 'Frame rate limit' 354 @('60','120','144','165','240','Unlimited (experimental)') ([Array]::IndexOf($frameRates,$frameRateValue))
 $null=Hint $graphics $frameRate 'Above 60 is experimental.' 386
 
 $null=Add-Fm4Section $graphics 'DLSS 5 Neural Rendering' 414
@@ -146,6 +147,12 @@ $dlcPath=Text $content 'DLC folder' 42 $(if($settings.dlc_folder){[string]$setti
 $dlcBrowse=Button $content 'Choose folder…' $fieldX 80 180
 $null=Hint $content $dlcPath 'Choose extracted FM4 DLC, or leave empty for Disc 2 content only.' 118 52
 $dlcBrowse.Add_Click({$dialog=[Windows.Forms.FolderBrowserDialog]::new();try{if($dialog.ShowDialog($form) -eq 'OK'){$dlcPath.Text=$dialog.SelectedPath}}finally{$dialog.Dispose()}})
+$originalDlcPath=Text $content 'Original Xbox content folder' 184 $(if($settings.dlc_packages_folder){[string]$settings.dlc_packages_folder}else{''})
+$originalDlcBrowse=Button $content 'Choose folder…' $fieldX 222 180
+$null=Hint $content $originalDlcPath 'Choose your FM4 title folder containing 00000002. Original packages take precedence over extracted copies. Leave empty to keep the current setup.' 260 74
+$vipOwned=Check $content 'I own the VIP pass' 352 ($settings.ContainsKey('fm4_vip_owned') -and [bool]$settings.fm4_vip_owned)
+$null=Hint $content $vipOwned 'Use your owned VIP membership locally. Car packs still need their own packages and licenses. Restart the game after changing this.' 386
+$originalDlcBrowse.Add_Click({$dialog=[Windows.Forms.FolderBrowserDialog]::new();try{if($dialog.ShowDialog($form) -eq 'OK'){$originalDlcPath.Text=$dialog.SelectedPath}}finally{$dialog.Dispose()}})
 function Get-TexturePackStatus([string]$folder) {
     if(-not $folder){return 'No pack folder selected.'}
     if(-not [IO.Path]::IsPathRooted($folder)){$folder=Join-Path $root $folder}
@@ -254,9 +261,9 @@ function Get-NeuralPlan{return Resolve-Fm4NeuralPath -Requested $neuralPaths[[Ma
 function Resolve-RuntimeFolder([string]$folder){$folder=$folder.Trim();if(-not $folder){return ''};if(-not [IO.Path]::IsPathRooted($folder)){$folder=Join-Path $root $folder};return [IO.Path]::GetFullPath($folder)}
 function Get-RenderPlan{
     $mode=$upscalers[[Math]::Max(0,$upscaler.SelectedIndex)];$outputScale=[Math]::Max(0,$profile.SelectedIndex)+1
-    $temporal=$mode -in @('DLSS','FSR');$usesScale=$temporal -or $nr.Checked
+    $temporal=$mode -in @('DLSS','FSR');$usesScale=$temporal -or $nr.Checked -or ($liveGraphicsScale -and $mode -ne 'SSAA')
     $internal=if($mode -eq 'SSAA'){$outputScale+1}elseif($usesScale){$script:savedScale}else{0}
-    # Mirrors Run-Enhanced.ps1: DLSS/FSR default to 720p input; native modes draw at the output size.
+    # DLSS/FSR default to 720p input; live graphics may retain a separate spatial scale.
     $renderScale=if($temporal){1}else{$outputScale};if($internal){$renderScale=$internal}
     return @{Mode=$mode;Output=$outputScale;Temporal=$temporal;UsesScale=$usesScale;Internal=$internal;Render=$renderScale}
 }
@@ -283,7 +290,7 @@ function Update-GraphicsPage{
             $scale.Items[0]='Automatic';$scale.SelectedIndex=$plan.Output
             $scaleHint.Text='Native modes use the output resolution.'
         }
-        $tooLarge=($plan.UsesScale -and $plan.Render -gt $plan.Output) -or ($plan.Mode -eq 'SSAA' -and $plan.Output -ge 3)
+        $tooLarge=(($plan.Temporal -or $nr.Checked) -and $plan.Render -gt $plan.Output) -or ($plan.Mode -eq 'SSAA' -and $plan.Output -ge 3)
         $text=if($tooLarge){'Render resolution must not be larger than the output resolution.'}
               elseif($plan.Mode -eq 'SSAA' -and $plan.Output -ge 3){'Supersampling is unavailable at 3840 × 2160.'}
               elseif($plan.Mode -eq 'SSAA'){'Supersampling: '+(Format-Resolution $plan.Render)+' to '+(Format-Resolution $plan.Output)+'.'}
@@ -336,7 +343,7 @@ function Read-Controls($baseSettings=$script:settings) {
     $render=Get-RenderPlan
     $s=$baseSettings.Clone()
     $s.forza_plus=Read-Pfp4Controls -Controls $pfpUi -BaseSettings $baseSettings -EditionRoot $root
-    # Native modes without Neural Rendering always save internal_scale 0 (true native).
+    # The default native plan saves zero; opt-in live graphics retains its explicit scale.
     $s.profile=$profiles[$profile.SelectedIndex];$s.upscaler=$upscalers[$upscaler.SelectedIndex];$s.internal_scale=[int]$render.Internal
     if($frameRate.SelectedIndex -lt 0){throw 'Choose a frame rate limit.'};$s.frame_rate_limit=[int]$frameRates[$frameRate.SelectedIndex]
     if($s.upscaler -eq 'SSAA'){if($render.Output -ge 3){throw 'Supersampling is unavailable at 3840 × 2160.'};$s.upscaler='Bilinear'}
@@ -345,8 +352,14 @@ function Read-Controls($baseSettings=$script:settings) {
     $s.texture_mode=$textureModes[[Math]::Max(0,$textureMode.SelectedIndex)];if($s.ContainsKey('enable_textures')){$s.Remove('enable_textures')}
     $s.texture_pack=$texturePath.Text.Trim();$s.enable_rgba_textures=$rgba.Checked
     if($dlcPath.Text.Trim()){$s.dlc_folder=$dlcPath.Text.Trim()}elseif($s.ContainsKey('dlc_folder')){$s.Remove('dlc_folder')}
+    if($originalDlcPath.Text.Trim()){$s.dlc_packages_folder=$originalDlcPath.Text.Trim()}elseif($s.ContainsKey('dlc_packages_folder')){$s.Remove('dlc_packages_folder')}
+    if($vipOwned.Checked){$s.fm4_vip_owned=$true}elseif($s.ContainsKey('fm4_vip_owned')){$s.fm4_vip_owned=$false}
     $s.readback_batch=$batch.Checked;$s.readback_center_sample=$center.Checked;$s.host_render_targets=$hostTargets.Checked;$s.readback_heap=$readback.Checked
     $s.runtime_overrides=if($s.runtime_overrides){$s.runtime_overrides.Clone()}else{@{}}
+    if($liveGraphicsScale){
+        $s.runtime_overrides.window_width=1280*$render.Output;$s.runtime_overrides.window_height=720*$render.Output
+        $s.runtime_overrides.fm4_live_output_width=1280*$render.Output;$s.runtime_overrides.fm4_live_output_height=720*$render.Output
+    }
     $s.runtime_overrides.query_occlusion_fake_sample_count=[int]$occlusionSamples.Value
     $s.runtime_overrides.texture_mip_bias=[double]$mipBiases[[Math]::Max(0,$mipBias.SelectedIndex)]
     $s.runtime_overrides.gpu_bulk_type0_register_writes=$bulkRegisters.Checked

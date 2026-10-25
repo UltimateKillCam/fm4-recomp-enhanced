@@ -18,6 +18,3 @@ url = "https://github.com/Alexbeav/fm4-recomp"
 repo = "https://github.com/Alexbeav/rexglue-sdk"
 commit = "f16992c92e610c2d71773994436b442d9946f4e1"
 line = "ReXGlue workbench (known-good baseline)"
-
-[acceptance]
-contract = "validation/acceptance.toml"

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet('Native','1440p','4K')][string]$Profile='Native',
     [ValidateSet('Bilinear','FSR1','CAS','DLSS','FSR')][string]$Upscaler='Bilinear',
@@ -96,13 +96,13 @@ if(-not $SettingsFile){
     if(-not(Test-Path -LiteralPath $SettingsFile)){$SettingsFile=Join-Path $root 'config/enhanced-settings.json'}
 }
 $settings=Get-Content -LiteralPath $SettingsFile -Raw -Encoding UTF8 | ConvertFrom-Fm4Json
-$knownKeys=@('dlc_folder','forza_plus','profile','internal_scale','upscaler','frame_rate_limit','gpu_adapter_name','texture_pack','texture_mode','enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','runtime_overrides','neural_rendering','neural_passes','neural_preset','neural_style','neural_strength','neural_runtime_folder','neural_path')
+$knownKeys=@('fm4_vip_owned','dlc_folder','dlc_headers_folder','dlc_packages_folder','forza_plus','profile','internal_scale','upscaler','frame_rate_limit','gpu_adapter_name','texture_pack','texture_mode','enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','runtime_overrides','neural_rendering','neural_passes','neural_preset','neural_style','neural_strength','neural_runtime_folder','neural_path')
 foreach($key in $settings.Keys){if($key -notin $knownKeys){throw "Unknown enhanced setting: $key"}}
 if($settings.ContainsKey('frame_rate_limit')){
     $FrameRateLimit=$settings.frame_rate_limit
-    if(($FrameRateLimit -isnot [int] -and $FrameRateLimit -isnot [long]) -or $FrameRateLimit -notin @(60,120,144,165,240)){throw 'Frame rate limit must be 60, 120, 144, 165 or 240.'}
+    if(($FrameRateLimit -isnot [int] -and $FrameRateLimit -isnot [long]) -or $FrameRateLimit -notin @(0,60,120,144,165,240)){throw 'Frame rate limit must be 0 (unlimited), 60, 120, 144, 165 or 240.'}
 }else{$FrameRateLimit=60}
-foreach($key in @('enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','neural_rendering')){
+foreach($key in @('fm4_vip_owned','enable_textures','enable_rgba_textures','readback_batch','host_render_targets','readback_heap','readback_center_sample','neural_rendering')){
     if($settings.ContainsKey($key) -and $settings[$key] -isnot [bool]){throw "Setting $key must be true or false."}
 }
 if($settings.ContainsKey('neural_runtime_folder') -and $settings.neural_runtime_folder -isnot [string]){throw 'Neural Rendering folder must be text.'}
@@ -247,9 +247,24 @@ if(Test-Path -LiteralPath $preservationPath){
 $workspace=Join-Path $root '.local'
 if($WorkspaceName){$workspace=Join-Path $workspace $WorkspaceName}
 $build=Join-Path $workspace 'work/fm4/out/build/win-amd64-release'
+if($settings.ContainsKey('fm4_vip_owned') -and $settings.fm4_vip_owned -eq $true){
+    $membershipGame=Join-Path $build 'fm4.exe'
+    if(-not(Test-Path -LiteralPath $membershipGame) -or
+       -not [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($membershipGame)).Contains('FM4 VIP: owner setting supplies Main/IsVip reads')){
+        throw 'VIP ownership needs an updated game build with local VIP support.'
+    }
+}
 if(-not $SdkInstallRoot){$SdkInstallRoot=Join-Path $root '.local/sdk-enhanced-install'}
 $SdkInstallRoot=[IO.Path]::GetFullPath($SdkInstallRoot)
 $sdk=Join-Path $SdkInstallRoot 'bin'
+if($settings.ContainsKey('dlc_packages_folder') -and $settings.dlc_packages_folder -and
+   -not ($settings.ContainsKey('forza_plus') -and $settings.forza_plus.enabled -eq $true)){
+    $contentRuntime=Join-Path $sdk 'rexruntime.dll'
+    if(-not(Test-Path -LiteralPath $contentRuntime) -or
+       -not [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($contentRuntime)).Contains('Fm4DlcContainersAvailable')){
+        throw 'Original Xbox content needs an updated runtime with original-container support.'
+    }
+}
 # These three binaries are built together. Keep the profiler dependency paired
 # with the runtime rather than retaining a potentially incompatible older copy.
 foreach($dll in @('rexruntime.dll','rexgpu-xenos.dll','TracyClient.dll')){
@@ -283,9 +298,19 @@ function Set-RuntimeValue([string]$key,$value){
 # Fewer, larger GPU submissions: each D3D12 submit that reaches an idle GPU can block for
 # several milliseconds. ~56-59 vs ~36 race FPS with the same rendering on the tested tracks.
 # Both remain overridable through runtime_overrides (Advanced tab).
-Set-RuntimeValue 'video_mode_refresh_rate' $FrameRateLimit
-Set-RuntimeValue 'vblank_frequency_override' $FrameRateLimit
-Write-Host "Frame rate limit: $FrameRateLimit FPS"
+# Unlimited bypasses the guest flip slot and follows guest swaps for interrupts,
+# with a 60 Hz fallback. Keep valid 240 Hz video-mode metadata independently.
+$guestRefresh=if($FrameRateLimit -eq 0){240}else{$FrameRateLimit}
+Set-RuntimeValue 'video_mode_refresh_rate' $guestRefresh
+Set-RuntimeValue 'vblank_frequency_override' $guestRefresh
+if($FrameRateLimit -eq 0){
+    Set-RuntimeValue 'gpu_unlimited_present' $true
+    Set-RuntimeValue 'gpu_present_driven_vblank' $true
+    Set-RuntimeValue 'fm4_uniform_physics_steps' $true
+    Set-RuntimeValue 'fm4_time_based_wheel_visuals' $true
+    Set-RuntimeValue 'fm4_time_based_visual_updates' $true
+}
+Write-Host $(if($FrameRateLimit -eq 0){'Frame rate limit: unlimited (experimental)'}else{"Frame rate limit: $FrameRateLimit FPS"})
 Set-RuntimeValue 'd3d12_readback_resolve_completion_boundary' $false
 Set-RuntimeValue 'd3d12_submit_on_primary_buffer_end' $false
 # Higher resolutions sample sharper mips than FM4's 720p target; a small bias reduces
@@ -298,6 +323,7 @@ if($settings.runtime_overrides){
         Set-RuntimeValue $key $settings.runtime_overrides[$key]
     }
 }
+if($settings.ContainsKey('fm4_vip_owned') -and $settings.fm4_vip_owned -eq $true){Set-RuntimeValue 'fm4_vip_owned' $true}
 $runFolder=Join-Path $root '.local/enhancements/runs'
 New-Item -ItemType Directory -Path $runFolder -Force | Out-Null
 $runId="$(Get-Date -Format 'yyyyMMdd-HHmmss')-$Profile-$Upscaler"
@@ -327,11 +353,19 @@ if($NeuralRendering){
     foreach($warning in $neuralPlan.Warnings){Write-Warning ($warning -replace ' is untested here; it needs a community runtime built for this GPU and costs much more GPU time\.',' needs a compatible community runtime and may run slowly.' -replace 'The official path is meant for RTX 50\. On other GPUs the driver is expected to decline; the direct bridge is then used if it is built\.','NVIDIA compatibility needs RTX 50; other cards may use the fallback.')}
     if($neuralPlan.Path -eq 'official'){Write-Warning 'RTX 50 Neural Rendering is experimental.'}
 }
+if($settings.ContainsKey('dlc_packages_folder') -and $settings.dlc_packages_folder -and
+   -not ($settings.ContainsKey('forza_plus') -and $settings.forza_plus.enabled -eq $true)){
+    & (Join-Path $PSScriptRoot 'Dlc-Packages.ps1') -SourcePackages ([string]$settings.dlc_packages_folder) -UserDataRoot $UserDataRoot
+}
 if($ValidateOnly){
     $preview=Join-Path $root '.local/enhancements/settings-preview.toml'
     Write-Fm4Utf8File -Path $preview -Text $config
     Write-Host "Settings valid: $([int]$scale*1280)x$([int]$scale*720); $Upscaler. Preview: $preview"
     if($neuralPlan -and -not $neuralPlan.Supported){throw ($neuralPlan.Warnings -join ' ')}
+    if($settings.ContainsKey('dlc_headers_folder') -and $settings.dlc_headers_folder -and
+       -not ($settings.ContainsKey('forza_plus') -and $settings.forza_plus.enabled -eq $true)){
+        & (Join-Path $PSScriptRoot 'Import-DlcHeaders.ps1') -SourceHeaders ([string]$settings.dlc_headers_folder) -UserDataRoot $UserDataRoot
+    }
     return
 }
 Write-Fm4Utf8File -Path (Join-Path $build 'fm4.toml') -Text $config
@@ -387,6 +421,10 @@ if(-not $forzaPlus -and $settings.ContainsKey('dlc_folder') -and $settings.dlc_f
         Write-Host "DLC: $dlcLinked added, $dlcPresent already installed."
     }
 }
+# Original containers replace same-name extracted copies with an archived backup.
+if(-not $forzaPlus -and $settings.ContainsKey('dlc_packages_folder') -and $settings.dlc_packages_folder){
+    & (Join-Path $PSScriptRoot 'Dlc-Packages.ps1') -SourcePackages ([string]$settings.dlc_packages_folder) -UserDataRoot $UserDataRoot -Apply
+}
 # Content headers (added 2026-10-23): FM4 only mounts marketplace packages that the runtime
 # lists from a header file; for a package folder without one the game is handed stale data and
 # skips it. Write a standard header (HDD device, marketplace type, FM4 title, no license) for
@@ -414,6 +452,11 @@ if(Test-Path -LiteralPath $packageRoot -PathType Container){
         $headersWritten++
     }
     if($headersWritten){Write-Host "DLC setup complete: $headersWritten packs."}
+}
+# Opt-in restoration of package-specific exported metadata. Existing settings
+# do not import or alter any license masks.
+if(-not $forzaPlus -and $settings.ContainsKey('dlc_headers_folder') -and $settings.dlc_headers_folder){
+    & (Join-Path $PSScriptRoot 'Import-DlcHeaders.ps1') -SourceHeaders ([string]$settings.dlc_headers_folder) -UserDataRoot $UserDataRoot -Apply:(-not $ValidateOnly)
 }
 $gameArguments = @("--game_data_root=$game")
 $gameArguments += "--user_data_root=$UserDataRoot"
@@ -551,6 +594,8 @@ if($forzaPlus){
 } else {
 $process=[Diagnostics.Process]::Start($start)
 }
+$process.PriorityClass='BelowNormal'
+$process.ProcessorAffinity=[IntPtr]0x0fff
 $receipt=@{profile=$Profile;upscaler=$Upscaler;batch=[bool]$ExperimentalReadbackBatch;hostTargets=[bool]$HostRenderTargets;readbackHeap=[bool]$ReadbackHeap;started=(Get-Date).ToString('o');pid=$process.Id;log=$runLog;runtimeSha256=(Get-FileHash (Join-Path $build 'rexruntime.dll')).Hash;gpuSha256=(Get-FileHash (Join-Path $build 'rexgpu-xenos.dll')).Hash}
 $receipt.background=[bool]$Background
 $receipt.headlessDialogs=[bool]$Background

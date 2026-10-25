@@ -1,0 +1,8 @@
+id = "loose"
+name = "Example loose file"
+version = "1.0.0"
+enabled = false
+order = 10
+game_version = "*"
+[files]
+"media/mod-example.txt" = "message.txt"

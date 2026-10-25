@@ -94,7 +94,7 @@ set(fm4_visibility_new [=[    if (REXCVAR_GET(gpu_occlusion_query_cumulative_fal
           register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]), sizeof(completed));
       static bool cumulative_logged = false;
       if (!cumulative_logged) {
-        REXGPU_INFO("FM4 cumulative visibility snapshots active; native readiness lanes published last");
+        REXGPU_INFO("FM4 cumulative visibility snapshots active; native readiness counters published last");
         cumulative_logged = true;
       }
       return true;
@@ -124,7 +124,11 @@ set(fm4_completion_core "#include <rex/graphics/fm4_visibility_counter.h>\n${fm4
 fm4_completion_replace(fm4_completion_core "REXCVAR_DEFINE_BOOL(vsync,"
   "${fm4_visibility_setting}REXCVAR_DEFINE_BOOL(vsync," "cumulative visibility setting")
 
-set(fm4_completion_cvar [=[REXCVAR_DEFINE_BOOL(d3d12_readback_resolve_gpu_completion, true, "GPU/D3D12",
+set(fm4_completion_cvar [=[REXCVAR_DEFINE_BOOL(d3d12_fence_early_completion, false, "GPU/D3D12",
+                    "Complete clean guest fences on the command processor; retain GPU ordering for CPU-visible writes")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(d3d12_readback_resolve_gpu_completion, true, "GPU/D3D12",
                     "Order shader completion writes on the GPU when full host resolve batching is enabled")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
@@ -137,7 +141,17 @@ fm4_completion_replace(fm4_completion_d3d "REXCVAR_DEFINE_BOOL(d3d12_bindless,"
   "${fm4_completion_cvar}REXCVAR_DEFINE_BOOL(d3d12_bindless," "setting")
 # Keep synthetic EXT extents immediate. Delaying EXT changes guest rendering
 # decisions and produced a reproducible tint bug.
-set(fm4_completion_methods [=[bool D3D12CommandProcessor::GpuOrderedShaderCompletionEnabled() {
+set(fm4_completion_methods [=[bool D3D12CommandProcessor::PrepareForGuestMemoryWrite() {
+  if (!REXCVAR_GET(d3d12_fence_early_completion)) return true;
+  const uint64_t pending = fence_completion_.PendingSubmission();
+  if (pending <= submission_completed_) return true;
+  // Submit an open producer before waiting. This covers imported RAM copies,
+  // immutable on-demand snapshots and previously queued shader markers.
+  CheckSubmissionFence(pending);
+  return pending <= submission_completed_;
+}
+
+bool D3D12CommandProcessor::GpuOrderedShaderCompletionEnabled() {
   return REXCVAR_GET(d3d12_readback_resolve_gpu_completion) &&
       REXCVAR_GET(d3d12_readback_resolve_frame_batch) &&
       !REXCVAR_GET(occlusion_query_enable) && !trace_writer_.is_open() &&
@@ -156,6 +170,19 @@ bool D3D12CommandProcessor::WriteShaderCompletion(uint32_t address, uint32_t val
   if (enabled && !gpu_shader_completion_active_)
     REXGPU_INFO("FM4 GPU-ordered shader completion active; host resolve copies remain full");
   gpu_shader_completion_active_ = enabled;
+  if (REXCVAR_GET(d3d12_fence_early_completion)) {
+    CheckSubmissionFence(0);
+    if (!visibility_data && fence_completion_.CanCompleteEarly(submission_completed_)) {
+      ++fence_early_count_;
+      if ((fence_early_count_ & 4095) == 1)
+        REXGPU_INFO("Guest fence completion: early={} ordered={} address={:08X}",
+                    fence_early_count_, fence_ordered_count_, address);
+      return CommandProcessor::WriteShaderCompletion(address, value, visibility_data);
+    }
+    // A CPU write must never overtake an older GPU marker, including when
+    // tracing or a configuration transition disables GPU-ordered completion.
+    if (!enabled && !PrepareForGuestMemoryWrite()) return false;
+  }
   if (!enabled) return CommandProcessor::WriteShaderCompletion(address, value, visibility_data);
   if (!BeginSubmission(true)) return false;
   ID3D12Resource* upload = nullptr;
@@ -177,6 +204,13 @@ bool D3D12CommandProcessor::WriteShaderCompletion(uint32_t address, uint32_t val
         address, upload, offset, sizeof(value));
   } else {
     gpu_shader_completions_.push_back({address, upload, offset});
+  }
+  if (REXCVAR_GET(d3d12_fence_early_completion)) {
+    fence_completion_.OrderedFence(submission_current_);
+    ++fence_ordered_count_;
+    if ((fence_ordered_count_ & 4095) == 1)
+      REXGPU_INFO("Guest fence completion: early={} ordered={} address={:08X}",
+                  fence_early_count_, fence_ordered_count_, address);
   }
   readback_host_copies_pending_ = true;
   // A marker accumulated until a later batch boundary may be overtaken by
@@ -248,7 +282,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${CMAKE_SOURCE_DIR}/include/rex/graphics/command_processor.h")
 string(REPLACE "\r\n" "\n" fm4_completion_core_header "${fm4_completion_core_header}")
 fm4_completion_replace(fm4_completion_core_header "  virtual void PrepareForWait();"
-  "  virtual bool WriteShaderCompletion(uint32_t address, uint32_t value, bool visibility_data = false);\n  virtual void PrepareForWait();" "base declaration")
+  "  virtual bool PrepareForGuestMemoryWrite() { return true; }\n  virtual bool WriteShaderCompletion(uint32_t address, uint32_t value, bool visibility_data = false);\n  virtual void PrepareForWait();" "base declaration")
 set(fm4_completion_d3d_path "rex/graphics/d3d12/command_processor.h")
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/include/rex/graphics/d3d12/fm4_frame_metrics.h" AND
    EXISTS "${CMAKE_BINARY_DIR}/fm4-runtime-fixes/include/${fm4_completion_d3d_path}")
@@ -260,7 +294,7 @@ file(READ "${fm4_completion_d3d_input}" fm4_completion_d3d_header)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${fm4_completion_d3d_input}")
 string(REPLACE "\r\n" "\n" fm4_completion_d3d_header "${fm4_completion_d3d_header}")
 fm4_completion_replace(fm4_completion_d3d_header "  void PrepareForWait() override;"
-  "  bool WriteShaderCompletion(uint32_t address, uint32_t value, bool visibility_data = false) override;\n  bool GpuOrderedShaderCompletionEnabled();\n  void PrepareForWait() override;" "D3D12 declarations")
+  "  bool PrepareForGuestMemoryWrite() override;\n  bool WriteShaderCompletion(uint32_t address, uint32_t value, bool visibility_data = false) override;\n  bool GpuOrderedShaderCompletionEnabled();\n  void PrepareForWait() override;" "D3D12 declarations")
 set(fm4_completion_fields [=[
   struct GpuShaderCompletion {
     uint32_t address;
@@ -269,9 +303,34 @@ set(fm4_completion_fields [=[
   };
   std::vector<GpuShaderCompletion> gpu_shader_completions_;
   Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> gpu_shader_completion_list_;
-  bool gpu_shader_completion_active_ = false;]=])
+  bool gpu_shader_completion_active_ = false;
+  fm4::fences::CompletionState fence_completion_;
+  uint64_t fence_early_count_ = 0;
+  uint64_t fence_ordered_count_ = 0;]=])
 fm4_completion_replace(fm4_completion_d3d_header "  std::vector<draw_util::MemExportRange> memexport_ranges_;"
   "  std::vector<draw_util::MemExportRange> memexport_ranges_;${fm4_completion_fields}" "D3D12 state")
+
+# Track the last producer submission, rather than a per-frame flag: submission
+# closure is not GPU completion, and several fences may follow one readback.
+fm4_completion_replace(fm4_completion_d3d
+  "  if (use_resolve_host_copy) {\n    if (REXCVAR_GET(d3d12_readback_resolve_frame_batch)"
+  "  if (use_resolve_host_copy) {\n    if (REXCVAR_GET(d3d12_fence_early_completion)) fence_completion_.CpuWrite(submission_current_);\n    if (REXCVAR_GET(d3d12_readback_resolve_frame_batch)" "CPU-visible resolve producer")
+fm4_completion_replace(fm4_completion_d3d "      if (memexport_total_size != 0) {"
+  "      if (memexport_total_size != 0) {\n        if (REXCVAR_GET(d3d12_fence_early_completion)) fence_completion_.CpuWrite(submission_current_);" "memexport readback producer")
+fm4_completion_replace(fm4_completion_d3d "  snapshot->producer_submission = submission_current_;"
+  "  snapshot->producer_submission = submission_current_;\n  if (REXCVAR_GET(d3d12_fence_early_completion)) fence_completion_.CpuWrite(submission_current_);" "on-demand resolve producer")
+# Shader labels have a GPU path above. Other CPU-emulated writes and interrupts
+# must drain older producers/labels before publishing guest-visible completion.
+# Synthetic EXT/ZPD reports retain their immediate, CPU-only visibility semantics.
+foreach(fm4_write_opcode INTERRUPT REG_TO_MEM MEM_WRITE COND_WRITE)
+  fm4_completion_replace(fm4_completion_core "    case PM4_${fm4_write_opcode}:\n"
+    "    case PM4_${fm4_write_opcode}:\n      if (!PrepareForGuestMemoryWrite()) return false;\n" "${fm4_write_opcode} ordering")
+endforeach()
+set(fm4_fence_header "${CMAKE_CURRENT_LIST_DIR}/Fence-Completion.h")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${fm4_fence_header}")
+configure_file("${fm4_fence_header}" "${fm4_completion_include}/rex/graphics/fm4_fence_completion.h" COPYONLY)
+set(fm4_completion_d3d_header "#include <rex/graphics/fm4_fence_completion.h>\n${fm4_completion_d3d_header}")
+install(FILES "${fm4_fence_header}" DESTINATION "include/rex/graphics" RENAME fm4_fence_completion.h)
 
 file(MAKE_DIRECTORY "${fm4_completion_include}/rex/graphics/d3d12")
 foreach(fm4_part core d3d)

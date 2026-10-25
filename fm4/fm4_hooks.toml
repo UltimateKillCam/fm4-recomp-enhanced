@@ -45,7 +45,7 @@ registers = ["r28", "r11"]
 [[midasm_hook]]
 name = "Fm4FixedDeltaState"
 address = 0x822F77E8
-registers = ["r28"]
+registers = ["r28", "f31"]
 
 # Native rendering only: redirect a verified tiled output loop to its private full-scene descriptor.
 [[midasm_hook]]

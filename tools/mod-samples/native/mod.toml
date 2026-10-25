@@ -1,0 +1,10 @@
+id = "native"
+name = "Example HUD and menu plugin"
+version = "1.0.0"
+enabled = false
+order = 60
+game_version = "*"
+native = "example.dll"
+gameplay = true
+[settings]
+greeting = "Example mod active"

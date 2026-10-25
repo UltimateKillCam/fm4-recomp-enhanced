@@ -1,0 +1,11 @@
+id = "strings"
+name = "Example replacement text"
+version = "1.0.0"
+enabled = false
+order = 50
+game_version = "*"
+[[strings]]
+archive = "media/stringtables/en.zip"
+table = "AIDiff.str"
+id = 43014
+text = "EXAMPLE DIFFICULTY"

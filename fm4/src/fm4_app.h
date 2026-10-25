@@ -22,15 +22,17 @@ public:
   // void OnPostInitLogging() override {}
   void OnPreSetup(rex::RuntimeConfig& config) override;
   // void OnLoadXexImage(std::string& xex_image) override {}
-#ifdef FM4_ENABLE_FORZA_PLUS_NATIVE
-  bool SetupEnvironment() override;
+#if defined(FM4_ENABLE_FORZA_PLUS_NATIVE) || defined(FM4_ENABLE_MODS)
   void OnConfigurePaths(rex::PathConfig& paths) override;
   bool ConstructRuntime(const rex::PathConfig& paths) override;
+#endif
+#ifdef FM4_ENABLE_FORZA_PLUS_NATIVE
+  bool SetupEnvironment() override;
   void OnPostLoadXexImage() override;
 #endif
   void OnPostSetup() override;
   void OnPostLaunchModule(rex::system::XThread* thread) override;
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override;
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;

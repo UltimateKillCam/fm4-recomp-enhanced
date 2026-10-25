@@ -68,4 +68,20 @@ inline void CopySwappedAndNotify(uint32_t* destination, const uint32_t* source, 
     }
   }
 }
+// Return bit 0/1 only when a changed word belongs to a constant read by a
+// live vertex/pixel upload. Null maps denote uploads that are already dirty.
+inline uint32_t CopySwappedConstantUsage(uint32_t* destination, const uint32_t* source,
+                                        size_t count, uint32_t first_word,
+                                        const uint64_t* vertex, const uint64_t* pixel) {
+  uint32_t changed_stages = 0;
+  CopySwappedAndNotify(destination, source, count,
+      [&](size_t offset, uint32_t, uint32_t) {
+        uint32_t constant = (first_word + uint32_t(offset)) >> 2;
+        const uint64_t* usage = constant < 256 ? vertex : pixel;
+        uint32_t local = constant & 255;
+        if (usage && (usage[local >> 6] & (uint64_t(1) << (local & 63))))
+          changed_stages |= constant < 256 ? 1u : 2u;
+      });
+  return changed_stages;
+}
 }  // namespace fm4::registers

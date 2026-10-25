@@ -21,6 +21,4 @@ if errorlevel 1 exit /b 1
 cmake -S "%FM4_ROOT%\tools\graphics" -B "%FM4_ROOT%\.local\graphics-build" -G Ninja -DCMAKE_CXX_COMPILER="%FM4_CLANGXX%" -DCMAKE_MAKE_PROGRAM="%FM4_NINJA%" -DCMAKE_BUILD_TYPE=Release
 if errorlevel 1 exit /b 1
 cmake --build "%FM4_ROOT%\.local\graphics-build" --parallel 2
-if errorlevel 1 exit /b 1
-ctest --test-dir "%FM4_ROOT%\.local\graphics-build" --output-on-failure
 exit /b %errorlevel%

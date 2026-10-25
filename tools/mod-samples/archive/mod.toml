@@ -1,0 +1,12 @@
+id = "archive"
+name = "Example archive member"
+version = "1.0.0"
+enabled = false
+order = 20
+game_version = "*"
+[files]
+"media/example.zip" = "base.zip"
+[[archives]]
+path = "media/example.zip"
+member = "example.txt"
+source = "message.txt"

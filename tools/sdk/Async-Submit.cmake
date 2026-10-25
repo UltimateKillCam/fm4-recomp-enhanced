@@ -85,6 +85,7 @@ class Fm4SubmitThread {
             uint64_t value) {
     std::lock_guard lock(mutex_);
     if (!thread_.joinable()) {
+      stop_ = false;
       queue_ = queue;
       thread_ = std::thread([this] { Run(); });
     }
@@ -239,6 +240,15 @@ Fm4SubmitThread fm4_submit_thread;
     }
 
     submission_open_ = false;]=] "signal")
+
+  fm4_swap([=[void D3D12CommandProcessor::PrepareForDirectQueueOperation() {}]=]
+    [=[void D3D12CommandProcessor::PrepareForDirectQueueOperation() {
+  fm4_submit_thread.Drain();
+}]=] "direct queue ordering")
+  fm4_swap([=[      if (SUCCEEDED(direct_queue->Signal(queue_operations_since_submission_fence_, fence_value)) &&]=]
+    [=[      fm4_submit_thread.Drain();
+      if (SUCCEEDED(direct_queue->Signal(queue_operations_since_submission_fence_, fence_value)) &&]=]
+    "out-of-submission signal ordering")
 
   file(WRITE "${fm4_file}" "${fm4_text}")
   message(STATUS "FM4 async submit applied")

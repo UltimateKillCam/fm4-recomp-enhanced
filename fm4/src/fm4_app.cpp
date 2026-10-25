@@ -2,6 +2,7 @@
 #include "generated/default/fm4_init.h"
 
 #include "fm4_app.h"
+#include "../../tools/mods/app_bridge.h"
 #ifdef FM4_ENABLE_FORZA_PLUS_NATIVE
 #include <rex/logging.h>
 #include "forza_plus/native_app_hooks.inc"
@@ -160,9 +161,24 @@ void Fm4App::OnPreSetup(rex::RuntimeConfig& config) {
 }
 
 void Fm4App::OnShutdown() {
+  fm4::mod_bridge::Stop();
   StopQuietCapture();
 #ifdef _WIN32
+  if (auto module = GetModuleHandleW(L"rexruntime.dll")) {
+    if (auto detach = reinterpret_cast<void(*)()>(GetProcAddress(module, "Fm4LiveSettingsDetach"))) detach();
+  }
     fm4::wheel::ShutdownFeedback();
+#endif
+}
+
+void Fm4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+  fm4::mod_bridge::Attach(drawer);
+#ifdef _WIN32
+  if (auto module = GetModuleHandleW(L"rexruntime.dll")) {
+    using Attach = void(*)(rex::ui::Window*, rex::ui::ImGuiDrawer*, rex::ui::Presenter*);
+    if (auto attach = reinterpret_cast<Attach>(GetProcAddress(module, "Fm4LiveSettingsAttach")))
+      attach(window(), drawer, runtime() && runtime()->graphics_system() ? runtime()->graphics_system()->presenter() : nullptr);
+  }
 #endif
 }
 
@@ -183,6 +199,7 @@ void Fm4App::StopQuietCapture() {
 }
 
 void Fm4App::OnPostSetup() {
+  fm4::mod_bridge::Start(runtime());
 #ifdef FM4_ENABLE_FORZA_PLUS_NATIVE
   // Prepared native content is receipt-owned; the stock auto-importer must
   // not mutate it after pre-entry validation.
@@ -293,3 +310,12 @@ void Fm4App::OnPostSetup() {
       "FM4 Disc 2 scan complete: {} installed, {} already present, {} rejected",
       installed_count, existing_count, rejected_count);
 }
+
+#if defined(FM4_ENABLE_MODS) && !defined(FM4_ENABLE_FORZA_PLUS_NATIVE)
+void Fm4App::OnConfigurePaths(rex::PathConfig& paths) {
+  fm4::mod_bridge::Configure(paths);
+}
+bool Fm4App::ConstructRuntime(const rex::PathConfig& paths) {
+  return fm4::mod_bridge::Check(paths) && rex::ReXApp::ConstructRuntime(paths);
+}
+#endif

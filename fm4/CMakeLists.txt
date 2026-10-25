@@ -1,4 +1,3 @@
-# Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 # fm4 - ReXGlue Recompiled Project
 #
 # SDK boilerplate lives in generated/rexglue.cmake.
@@ -33,14 +32,25 @@ endif()
 
 rexglue_setup_target(fm4 GPU_PLUGINS xenos)
 
+option(FM4_VIP_CONTENT "Build optional local VIP ownership and content inspection" OFF)
+if(FM4_VIP_CONTENT)
+    target_sources(fm4 PRIVATE src/content_hooks.cpp)
+endif()
+
+option(FM4_ENABLE_MODS "Enable optional native mod application/game hooks" OFF)
+if(FM4_ENABLE_MODS)
+    if(NOT WIN32)
+        message(FATAL_ERROR "FM4 mod host currently requires Windows")
+    endif()
+    set_property(SOURCE src/main.cpp src/fm4_app.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS FM4_ENABLE_MODS=1)
+    set_property(SOURCE src/hooks.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS FM4_MOD_GAME_HOOKS=1)
+endif()
+
 # Opt-in native data adaptation. Generated PPC modules/entry configuration
 # remain original. Review the separate receipt installer before enabling.
-# Built by default on Windows; the launcher toggle stays off until the user enables it.
-set(fm4_pfp_default OFF)
-if(WIN32)
-    set(fm4_pfp_default ON)
-endif()
-option(FM4_ENABLE_FORZA_PLUS_NATIVE "Build native Forza Plus receipt/resource hook" ${fm4_pfp_default})
+option(FM4_ENABLE_FORZA_PLUS_NATIVE "Build native Forza Plus receipt/resource hook" OFF)
 if(FM4_ENABLE_FORZA_PLUS_NATIVE)
     if(NOT WIN32)
         message(FATAL_ERROR "Current native Forza Plus verifier requires Windows CNG/file leases")

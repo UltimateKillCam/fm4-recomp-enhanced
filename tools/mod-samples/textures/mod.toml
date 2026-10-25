@@ -1,0 +1,7 @@
+id = "textures"
+name = "Example texture pack"
+version = "1.0.0"
+enabled = false
+order = 40
+game_version = "*"
+textures = "pack"

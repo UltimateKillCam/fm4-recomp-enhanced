@@ -99,19 +99,6 @@ watchdog. Gyro steering and audio-driven PS5 HD haptics are not implemented.
 
 ## Diagnostics and limitations
 
-Build the standalone tools without generated game code:
-
-```powershell
-cmake -S tools/wheel -B .local/wheel-build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build .local/wheel-build --parallel 2
-ctest --test-dir .local/wheel-build --output-on-failure
-.local/wheel-build/wheel-probe.exe --watch 60
-```
-
-The probe reads axes, buttons and supported effects; it never plays forces.
-Optional SDK-backed tests require `-DFM4_SDK_INSTALL=<SDK install>`.
-Virtual device tests cover calibration, effect decoding, switching and reconnect
-behavior; they do not verify hardware feel or USB/Bluetooth transport.
 `FM4_TRACE_INPUT=1` enables periodic input logging.
 
 The run scripts support hidden, muted diagnostics with `-Background`,

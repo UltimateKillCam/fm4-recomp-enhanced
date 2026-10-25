@@ -1,4 +1,4 @@
-// Prepared protected-resource adapter. Modified 2026-10-23.
+// PRIVATE PROPOSAL. Not integrated or SDK-built. Independent implementation.
 // A verifier must produce this input after hashing the ORIGINAL native XEX,
 // every FINAL prepared protected file and receipt and independently rebuilding
 // the 66-entry resource. This header alone is NOT a readiness/receipt verifier.

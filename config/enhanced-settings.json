@@ -25,6 +25,6 @@
     "texture_cache_memory_limit_hard": 3072,
     "present_fsr_sharpness_reduction": 0.5,
     "present_dither": true,
-    "gpu_native_render_targets": true
+    "gpu_native_render_targets": false
   }
 }

@@ -13,6 +13,12 @@
 #include <cstdlib>
 #include <atomic>
 #include <map>
+#include <chrono>
+#include <rex/cvar.h>
+
+REXCVAR_DEFINE_BOOL(fm4_time_based_wheel_visuals, false, "FM4",
+                   "Experimental: use elapsed time for cockpit wheel matching and easing")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace {
 std::mutex effects_mutex;
@@ -227,28 +233,44 @@ REX_HOOK_RAW(sub_82CA9E68) {
 // when it clearly contradicts it (replays); everything else keeps the game's own angle.
 extern "C" REX_FUNC(__imp__sub_822E6590);
 REX_HOOK_RAW(sub_822E6590) {
-  struct Track { int votes = 0, misses = 0, blend = 0; bool locked = false; uint32_t seen = 0; };
+  using Clock = std::chrono::steady_clock;
+  struct Track {
+    int votes = 0, misses = 0, blend = 0;
+    bool locked = false; uint32_t seen = 0;
+    double vote_seconds = 0, miss_seconds = 0, blend_seconds = 0;
+    Clock::time_point last{};
+  };
   static std::map<uint32_t, Track> tracks;
   static uint32_t clock = 0;
   float steering = 0, rotation_scale = 1, rotation_degrees = 900;
   if (fm4::wheel::CockpitSteering(steering, rotation_scale, rotation_degrees)) {
     const uint32_t self = ctx.r3.u32;
     const double game = ctx.f1.f64;
+    const bool timed = REXCVAR_GET(fm4_time_based_wheel_visuals);
+    const auto now = timed ? Clock::now() : Clock::time_point{};
     ++clock;
     if (tracks.size() > 64)
-      std::erase_if(tracks, [](const auto& entry) { return clock - entry.second.seen > 600; });
+      std::erase_if(tracks, [&](const auto& entry) {
+        return timed ? now - entry.second.last > std::chrono::seconds(10) :
+                       clock - entry.second.seen > 600;
+      });
     auto& track = tracks[self];
+    const double elapsed = !timed || track.last == Clock::time_point{} ? 0.0 :
+        std::clamp(std::chrono::duration<double>(now - track.last).count(), 0.0, 0.1);
+    if (timed) track.last = now;
     track.seen = clock;
     const bool follows = fm4::wheel::TracksSteering(game, steering);
     if (track.locked) {
       track.misses = fm4::wheel::ContradictsSteering(game, steering) ? track.misses + 1 : 0;
-      if (track.misses > 120) {
+      track.miss_seconds = track.misses ? track.miss_seconds + elapsed : 0;
+      if (timed ? track.miss_seconds > 2.0 : track.misses > 120) {
         REXLOG_INFO("FM4 cockpit wheel released presentation {:08X}", self);
         track = {}; track.seen = clock;
       }
     } else {
       track.votes = follows && std::abs(steering) > 0.05f ? track.votes + 1 : 0;
-      if (track.votes >= 20) {
+      track.vote_seconds = track.votes ? track.vote_seconds + elapsed : 0;
+      if (timed ? track.vote_seconds >= 20.0 / 60.0 : track.votes >= 20) {
         track.locked = true;
         REXLOG_INFO("FM4 cockpit wheel drawn 1:1 ({} degrees) for presentation {:08X}", rotation_degrees, self);
       }
@@ -258,9 +280,11 @@ REX_HOOK_RAW(sub_822E6590) {
       const float draw_scale = std::bit_cast<float>(fm4::wheel::ReadBE({base + 0x82D92C94u, 4}, 0));
       const double target = fm4::wheel::OneToOneWheelAngle(steering, rotation_scale, rotation_degrees,
           draw_scale > 0.05f && draw_scale < 10.0f ? draw_scale : 0.75f);
-      // Ease from the game's angle to 1:1 over 12 frames when a lock engages.
+      // Preserve the legacy 12-frame ease, or use its 0.2-second duration.
       track.blend = std::min(track.blend + 1, 12);
-      ctx.f1.f64 = game + (target - game) * (track.blend / 12.0);
+      track.blend_seconds = std::min(track.blend_seconds + elapsed, 0.2);
+      const double blend = timed ? track.blend_seconds / 0.2 : track.blend / 12.0;
+      ctx.f1.f64 = game + (target - game) * blend;
     }
     static const bool trace = std::getenv("FM4_TRACE_INPUT") != nullptr;
     static uint32_t traced = 0;

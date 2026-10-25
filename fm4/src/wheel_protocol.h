@@ -1,4 +1,3 @@
-// Wheel/controller integration. Modified 2026-10-17. GPL-3.0-only.
 #pragma once
 #include "wheel_math.h"
 #include <bit>

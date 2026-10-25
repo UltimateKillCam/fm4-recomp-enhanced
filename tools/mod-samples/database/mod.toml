@@ -1,0 +1,10 @@
+id = "database"
+name = "Example database patch"
+version = "1.0.0"
+enabled = false
+order = 30
+game_version = "*"
+gameplay = true
+[[database]]
+path = "media/db/gamedb.slt"
+patch = "patch.json"

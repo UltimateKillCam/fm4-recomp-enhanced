@@ -1,4 +1,4 @@
-// Runtime launch-receipt verifier. Modified 2026-10-23.
+// Private runtime launch-receipt verifier; independent code, not integrated.
 #pragma once
 #include "native_protected_verifier.hpp"
 #include <nlohmann/json.hpp>

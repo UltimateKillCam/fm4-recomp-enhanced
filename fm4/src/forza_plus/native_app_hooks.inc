@@ -64,6 +64,7 @@ bool FM4_PFP_APP_CLASS::SetupEnvironment() {
   catch(const std::exception& error){fm4_plus_proposal::ReportLaunchFailure("Forza Plus edition lease",error);return false;}
 }
 void FM4_PFP_APP_CLASS::OnConfigurePaths(rex::PathConfig& paths) {
+  fm4::mod_bridge::Configure(paths);
   try {
   auto& session=fm4_plus_proposal::Session();
   const auto generation=fm4_plus_proposal::EnvironmentPath(L"FM4_FORZA_PLUS_GENERATION");
@@ -83,6 +84,7 @@ void FM4_PFP_APP_CLASS::OnConfigurePaths(rex::PathConfig& paths) {
   }
 }
 bool FM4_PFP_APP_CLASS::ConstructRuntime(const rex::PathConfig& paths) {
+  if (!fm4::mod_bridge::Check(paths)) return false;
   try {
     auto& session=fm4_plus_proposal::Session();
     fm4_plus_proposal::Require(!fm4_plus_proposal::ConfigureFailed(),"Forza Plus generation verification failed; see last-launch-error.txt");

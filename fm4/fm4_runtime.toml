@@ -25,9 +25,9 @@ d3d12_break_on_error = false
 d3d12_break_on_warning = false
 occlusion_query_enable = false
 # FM4 uses sample counts for visibility thresholds, not only zero/nonzero.
-# A count of 100 culls the Bernese Alps road; 1000000 saturates FM4's exposure/glare
-# (Iberian circuit renders white). 1000 keeps the road and Iberian correct (2026-10-19).
-query_occlusion_fake_sample_count = 1000
+# A count of 100 incorrectly culls the Bernese Alps road and other large mesh
+# groups. Keep those groups visible while real occlusion queries are disabled.
+query_occlusion_fake_sample_count = 1000000
 mnk_mode = true
 # Keyboard is a menu fallback alongside the wheel and controller. Mouse input
 # must not hold a driving trigger or move the garage camera when focusing UI.
@@ -45,10 +45,3 @@ fm4_auto_install_disc2_content = true
 fm4_disc2_content_root = ""
 keybind_a = "Space"
 keybind_start = "Escape"
-
-# Batched full host-copy resolves with GPU-ordered completion markers and fewer,
-# larger GPU submissions (~56-59 race FPS instead of ~36; same rendering on the tested
-# tracks, 2026-10-19).
-d3d12_readback_resolve_frame_batch = true
-d3d12_readback_resolve_completion_boundary = false
-d3d12_submit_on_primary_buffer_end = false
