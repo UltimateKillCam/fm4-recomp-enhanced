@@ -73,6 +73,15 @@ Performance overrides (added 2026-10-24, set under `runtime_overrides`, all defa
 | `host_render_targets_depth_scissor_ownership` | Limits depth-only render-target copies to the drawn area. |
 | `host_render_targets_scissor_ownership` | Limits all render-target copies to the area a draw can touch. |
 | `host_render_targets_msaa_samples_max` = 1 with `host_render_targets_msaa_collapse` | Renders the game's MSAA surfaces single-sampled when resolution scaling is on; about 15-20% less GPU time at 4K, but shows rectangles in the mirrors on some cars and tracks. Not recommended. |
+Native render targets (`gpu_native_render_targets`, default on, requires the
+RTV path): replaces the Xbox 360 EDRAM emulation with one D3D12 surface per
+render target, native clears and MSAA, and converts aliased surfaces only when
+their contents are read. Cleared contents are recreated with a native clear
+instead of being copied. In paired race tests it cut GPU time per frame by
+about 33% at 1440p and 41% at native 4K, with identical images (mirrors, HUD,
+shadows). Set it to `false` under `runtime_overrides` to return to EDRAM
+emulation. The game's banded (tiled) passes are still drawn band by band; GPU
+trace snapshots are not supported on this path.
 
 Other scalar runtime overrides are stored under `runtime_overrides` in
 `.local/enhancements/settings.json`. Defaults come from

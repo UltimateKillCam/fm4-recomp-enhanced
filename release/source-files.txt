@@ -28,6 +28,7 @@ fm4/speechfacade_functions.toml
 fm4/src/fm4_app.cpp
 fm4/src/fm4_app.h
 fm4/src/hooks.cpp
+fm4/src/native_tiling_hooks.cpp
 fm4/src/main.cpp
 fm4/src/wheel_math.h
 fm4/src/input_policy.h

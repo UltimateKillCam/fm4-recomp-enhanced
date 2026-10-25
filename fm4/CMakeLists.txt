@@ -15,6 +15,7 @@ include(generated/rexglue.cmake)
 set(FM4_SOURCES
     src/main.cpp
     src/hooks.cpp
+    src/native_tiling_hooks.cpp
     src/fm4_app.cpp
 )
 
