@@ -72,7 +72,7 @@ Performance overrides (added 2026-10-24, set under `runtime_overrides`, all defa
 | `d3d12_resolve_readback_barrier_batch` | Removes duplicate GPU barriers around render-target copies. |
 | `host_render_targets_depth_scissor_ownership` | Limits depth-only render-target copies to the drawn area. |
 | `host_render_targets_scissor_ownership` | Limits all render-target copies to the area a draw can touch. |
-| `host_render_targets_msaa_samples_max` = 1 with `host_render_targets_msaa_collapse` | Renders the game's MSAA surfaces single-sampled when resolution scaling is on; about 15-20% less GPU time at 4K. |
+| `host_render_targets_msaa_samples_max` = 1 with `host_render_targets_msaa_collapse` | Renders the game's MSAA surfaces single-sampled when resolution scaling is on; about 15-20% less GPU time at 4K, but shows rectangles in the mirrors on some cars and tracks. Not recommended. |
 
 Other scalar runtime overrides are stored under `runtime_overrides` in
 `.local/enhancements/settings.json`. Defaults come from
