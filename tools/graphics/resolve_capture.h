@@ -79,8 +79,9 @@ inline std::vector<ColourTexture> colour_textures;
 template<class Processor>
 inline void RecordColourTexture(Processor& cp, ID3D12Resource* resource,
                              D3D12_RESOURCE_STATES resource_state) {
+  if (!active || !resource || colour_textures.size() >= 5) return;
   const bool rtv = std::getenv("FM4_CAPTURE_RTV_COLOR") != nullptr;
-  if (!active || (!rtv && !std::getenv("FM4_CAPTURE_ROV_DEPTH")) || !resource || colour_textures.size() >= 5) return;
+  if (!rtv && !std::getenv("FM4_CAPTURE_ROV_DEPTH")) return;
   const auto desc = resource->GetDesc();
   if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
       desc.Width < 256 || desc.Width > 2048 || desc.Height > 2048) return;

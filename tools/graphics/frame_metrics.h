@@ -139,7 +139,7 @@ struct Trace {
     if (!enabled) return false;
     auto now = Clock::now(); Mark(now);
     Line().Arm(phase);
-    Line().Add('F', Timeline::Now(), Timeline::Now());
+    if (Line().begin) Line().Add('F', Timeline::Now(), Timeline::Now());
     Line().MaybeWrite();
     if (!previous_cpu || (++swaps % 15 == 0 && ReadPhase())) { Reset(now); return false; }
     // Include long stalls. Dropping >1-second intervals hides the very faults
@@ -263,7 +263,7 @@ struct GpuTrace {
   }
   template<class CommandList>
   void End(CommandList* list, UINT slot, uint64_t fence) {
-    if (!resolve) Line().Add('E', Timeline::Now(), Timeline::Now(), fence);
+    if (!resolve && Line().begin) Line().Add('E', Timeline::Now(), Timeline::Now(), fence);
     if (slot == UINT_MAX) return;
     if constexpr(requires { list->D3DEndQuery(heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2); }) {
       list->D3DEndQuery(heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);

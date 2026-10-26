@@ -170,7 +170,9 @@ fm4_recorder_replace([=[class Fm4SubmitThread {]=] [=[class Fm4RecorderTiming {
  public:
   enum Site { Acquire, Ring, PushLock, DrainInline, DrainDirect, DrainFence,
               Allocator, Resolve, Handoff, WorkerReset, WorkerRecord, WorkerExecute, Count };
-  explicit Fm4RecorderTiming(Site site) : site_(site), enabled_(REXCVAR_GET(d3d12_recorder_thread)) {
+  explicit Fm4RecorderTiming(Site site) : site_(site),
+      enabled_(REXCVAR_GET(d3d12_recorder_thread) &&
+          (!REXCVAR_GET(n1_hotpath_cache) || Requested())) {
     if (enabled_) QueryPerformanceCounter(&start_);
   }
   ~Fm4RecorderTiming() {
@@ -197,6 +199,10 @@ fm4_recorder_replace([=[class Fm4SubmitThread {]=] [=[class Fm4RecorderTiming {
     counters.last = end.QuadPart;
   }
  private:
+  static bool Requested() {
+    static const bool requested = std::getenv("FM4_RECORDER_TIMING") != nullptr;
+    return requested;
+  }
   struct Counters { int64_t ticks[Count] = {}; uint64_t calls[Count] = {}; int64_t last = 0; };
   static Counters* GetCounters() {
     // Allocate diagnostics only when enabled. Do not change the module's static

@@ -184,3 +184,8 @@ tools/graphics/quick_register_update.h
 tools/sdk/Cpu-Quickwins.cmake
 tools/sdk/Fence-Completion.h
 tools/sdk/Recorder-Thread.cmake
+fm4/src/native_hot.cpp
+tools/graphics/pm4_native.h
+tools/graphics/pm4_native.cpp
+tools/sdk/Pm4-Fast.cmake
+tools/sdk/Async-Queue.cmake

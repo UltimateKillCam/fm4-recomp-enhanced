@@ -58,8 +58,10 @@ function(fm4_pass_timing)
   if (!BeginSubmission(true)) {
     return false;
   }
-  fm4::frame_metrics::Passes().Mark(GetD3D12Provider().GetDevice(), GetD3D12Provider().GetDirectQueue(),
-      deferred_command_list_, fm4::frame_metrics::PassTrace::kResolveKey);
+  if (fm4::frame_metrics::Get().enabled) {
+    fm4::frame_metrics::Passes().Mark(GetD3D12Provider().GetDevice(), GetD3D12Provider().GetDirectQueue(),
+        deferred_command_list_, fm4::frame_metrics::PassTrace::kResolveKey);
+  }
 ]=] "resolve")
   fm4_pass_swap([=[      deferred_command_list_.Execute(command_list_, command_list_1_);
 ]=] [=[      deferred_command_list_.Execute(command_list_, command_list_1_);

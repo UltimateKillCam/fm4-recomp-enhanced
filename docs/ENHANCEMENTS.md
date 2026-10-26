@@ -152,6 +152,11 @@ Performance overrides (added 2026-10-24, set under `runtime_overrides`, all defa
 | `d3d12_recorder_thread` | Records D3D12 command lists on worker threads, taking work off the GPU command thread. |
 | `d3d12_binding_layout_compare`, `d3d12_constant_blocks`, `d3d12_native_alias_exact_range`, `d3d12_state_domain_batch`, `d3d12_ticketed_submit_ordering` | CPU fast paths for draw-state, constant and submission handling. Requires an SDK built with `-DFM4_CPU_QUICKWINS=ON`. |
 | `fm4_streaming_asset_pool_mb` | Guest streaming asset pool, 132-160 MB, default 160. Lower values can leave roadside textures blurred at high frame rates. |
+| `n2_pm4_fast` | Processes guest GPU register and constant ranges with native AVX2 copies and compares instead of per-word handlers. Needs `-DFM4_CPU_QUICKWINS=ON`. |
+| `n3_async_queue` | Moves remaining queue submissions off the GPU command thread onto the ordered submit worker. Use with `d3d12_async_submit` and `d3d12_recorder_thread`; keep `d3d12_submit_draw_interval` at 256. Needs `-DFM4_CPU_QUICKWINS=ON`. |
+| `n5_draw_reuse` | Reuses texture preparation and descriptor validation between draws while their textures are unchanged. |
+| `n1_hotpath_cache` | Caches readback policy lookups and diagnostic switches on the command thread; recorder timing then needs `FM4_RECORDER_TIMING=1`. |
+| `n4_native_hot`, `n4_native_transform` | Runs the game's byte fill/copy and vector transform helpers as native code, with exact results. |
 
 
 

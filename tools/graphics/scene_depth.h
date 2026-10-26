@@ -9,6 +9,7 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <rex/graphics/util/draw.h>
+#include <rex/graphics/flags.h>
 #include <rex/logging.h>
 #include <rex/ui/d3d12/d3d12_util.h>
 
@@ -23,7 +24,11 @@ inline uint64_t readback_size = 0;
 inline uint32_t scale_x = 0, scale_y = 0, rows = 0, bins = 0;
 inline bool failed = false;
 
-inline bool Enabled() { return std::getenv("FM4_SCENE_DEPTH_SHADER") != nullptr; }
+inline bool Enabled() {
+  if (!REXCVAR_GET(n1_hotpath_cache)) return std::getenv("FM4_SCENE_DEPTH_SHADER") != nullptr;
+  static const bool enabled = std::getenv("FM4_SCENE_DEPTH_SHADER") != nullptr;
+  return enabled;
+}
 inline bool Complete() { return texture && rows == 720; }
 inline bool Wants(const rex::graphics::draw_util::ResolveInfo& info) {
   return Enabled() && !failed && rows < 720 && info.IsClearingDepth() &&
