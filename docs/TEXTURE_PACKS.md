@@ -41,6 +41,7 @@ python tools/Texture-Packs.py status textures/MyPack
 python tools/Texture-Packs.py finish textures/MyPack
 python tools/Texture-Packs.py combine textures/PackA textures/PackB --name Combined
 python tools/Texture-Packs.py export textures/MyPack --output "D:\Exports\MyPack.zip"
+python tools/Texture-Packs.py repair textures/MyPack textures/MyPack-fixed
 ```
 
 Import creates `textures/MyPack/replacements`, validates the DDS files and
@@ -52,6 +53,10 @@ and refuses conflicting replacements for the same identity.
 
 Export writes validated DDS files, a manifest and a separate SHA-256 checksum;
 it does not upload anything or include source images, saves or machine paths.
+
+`repair` writes a new pack. Where a BC3 replacement's top level is transparent, it restores the colour
+from the original level below, removing coloured fringes and surfaces that some upscalers leave behind.
+It needs numpy; other levels and alpha are kept unchanged.
 
 ## Compatibility and limitations
 
