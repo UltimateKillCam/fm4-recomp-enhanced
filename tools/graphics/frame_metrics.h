@@ -93,6 +93,8 @@ struct Trace {
   uint64_t draw_state_hits = 0, pipeline_state_hits = 0;
   uint64_t shader_state_hits = 0, raster_state_hits = 0;
   uint64_t system_state_hits = 0, sampler_state_hits = 0;
+  uint64_t command_starvations = 0, command_event_waits = 0, ring_progress_writes = 0;
+  uint64_t guest_wait_packets = 0, guest_wait_sleeps = 0, guest_wait_notifications = 0;
   std::string phase = "unmarked";
   // Set when Frame() closed a metrics window, for the per-pass GPU report.
   std::string reported_phase;
@@ -121,6 +123,8 @@ struct Trace {
     constant_calls = constant_skips = 0;
     type0_words = type0_constant_words = 0;
     bulk_state_words = 0;
+    command_starvations = command_event_waits = ring_progress_writes = 0;
+    guest_wait_packets = guest_wait_sleeps = guest_wait_notifications = 0;
     draw_state_hits = pipeline_state_hits = 0;
     shader_state_hits = raster_state_hits = system_state_hits = sampler_state_hits = 0;
   }
@@ -193,6 +197,11 @@ struct Trace {
         ms[size_t(Stage::Constants)] / count, ms[size_t(Stage::Bindings)] / count,
         ms[size_t(Stage::Textures)] / count, ms[size_t(Stage::Primitives)] / count,
         ms[size_t(Stage::Camera)] / count);
+    REXGPU_INFO("FM4 overlap metrics: phase={} frames={} command_starvations={:.2f} command_event_waits={:.2f} ring_progress_writes={:.2f} guest_wait_packets={:.2f} guest_wait_sleeps={:.2f} guest_wait_notifications={:.2f}",
+        phase, frames.size(), double(command_starvations) / count,
+        double(command_event_waits) / count, double(ring_progress_writes) / count,
+        double(guest_wait_packets) / count, double(guest_wait_sleeps) / count,
+        double(guest_wait_notifications) / count);
     reported_phase = phase; reported_frames = count;
     Reset(now);
     return true;

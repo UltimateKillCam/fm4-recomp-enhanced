@@ -157,6 +157,10 @@ Performance overrides (added 2026-10-24, set under `runtime_overrides`, all defa
 | `n5_draw_reuse` | Reuses texture preparation and descriptor validation between draws while their textures are unchanged. |
 | `n1_hotpath_cache` | Caches readback policy lookups and diagnostic switches on the command thread; recorder timing then needs `FM4_RECORDER_TIMING=1`. |
 | `n4_native_hot`, `n4_native_transform` | Runs the game's byte fill/copy and vector transform helpers as native code, with exact results. |
+| `m1_native_more` | Runs six more of the game's math, table-decode and search helpers as native code, with exact results. |
+| `m2_draw_core` | Caches pipeline and root-signature selection, render-target setup and unchanged system constants between draws. |
+| `m3_present_lean` | Stops redrawing the hidden live-settings overlay every frame and wakes present-driven vblank by event instead of polling. |
+| `m4_overlap` | Experimental: earlier command-ring consumption and event-driven register waits. Leave off unless testing. |
 
 
 

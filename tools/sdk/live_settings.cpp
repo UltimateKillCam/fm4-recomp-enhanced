@@ -34,6 +34,7 @@
 REXCVAR_DEFINE_BOOL(fm4_live_settings, false, "Forza Motorsport 4",
                    "Enable F6 graphics settings and the private diagnostic request file")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DECLARE(bool, m3_present_lean);
 REXCVAR_DEFINE_INT32(fm4_live_output_width, 0, "Forza Motorsport 4", "Saved output width; zero uses the launcher")
     .range(0, 3840);
 REXCVAR_DEFINE_INT32(fm4_live_output_height, 0, "Forza Motorsport 4", "Saved output height; zero uses the launcher")
@@ -58,6 +59,8 @@ rex::ui::Window* host_window = nullptr;
 rex::ui::Presenter* host_presenter = nullptr;
 Request applied;
 bool have_applied = false;
+UINT_PTR idle_timer = 0;
+void PollIdleDialog();
 
 std::filesystem::path EnvPath(const char* name) {
   const char* value = std::getenv(name);
@@ -222,12 +225,32 @@ class Dialog final : public rex::ui::ImGuiDialog {
         for (int i = 0; i < 5; ++i) if (doc.value("upscaler", "Bilinear") == choices[i]) launch_effect_ = i;
       } catch (...) {}
     }
+    UpdateAttachment();
   }
-  void OnDraw(ImGuiIO& io) override {
-    int count = 0;
-    auto* ids = SDL_GetGamepads(&count);
+  void UpdateAttachment() {
+    if (!idle_timer) return;
+    bool needed = visible_;
+#ifdef FM4_INGAME_TOOLS
+    needed = needed || fm4::tools::HasToasts();
+#endif
+    if (needed) imgui_drawer()->AddDialog(this);
+    else imgui_drawer()->RemoveDialog(this);
+  }
+  void PollIdle() {
+    if (visible_) return;
+    PollController(nullptr);
+#ifdef FM4_INGAME_TOOLS
+    fm4::tools::PollDiagnostic(visible_);
+    if (!visible_) fm4::tools::TrainerClosed();
+#endif
+    active.store(visible_);
+    UpdateAttachment();
+  }
+  void PollController(ImGuiIO* io) {
     const bool focused = host_window && !std::getenv("FM4_BACKGROUND") &&
         GetForegroundWindow() == host_window->GetNativeWindowHandle();
+    int count = 0;
+    auto* ids = focused ? SDL_GetGamepads(&count) : nullptr;
     SDL_Gamepad* pad = nullptr;
     if (focused) for (int i = 0; i < count; ++i) {
       if (auto* candidate = SDL_GetGamepadFromID(ids[i])) {
@@ -238,9 +261,9 @@ class Dialog final : public rex::ui::ImGuiDialog {
     bool chord = button(SDL_GAMEPAD_BUTTON_BACK) && button(SDL_GAMEPAD_BUTTON_START);
     if (chord && !chord_) Toggle();
     chord_ = chord;
-    if (visible_) {
-      io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
-      io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    if (visible_ && io) {
+      io->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+      io->BackendFlags |= ImGuiBackendFlags_HasGamepad;
     }
       const std::pair<ImGuiKey, SDL_GamepadButton> keys[] = {
         {ImGuiKey_GamepadDpadUp, SDL_GAMEPAD_BUTTON_DPAD_UP},
@@ -251,15 +274,18 @@ class Dialog final : public rex::ui::ImGuiDialog {
         {ImGuiKey_GamepadFaceRight, SDL_GAMEPAD_BUTTON_EAST},
         {ImGuiKey_GamepadL1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER},
         {ImGuiKey_GamepadR1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER}};
-      for (auto [key, source] : keys) io.AddKeyEvent(key, visible_ && !chord && button(source));
+      if (io) for (auto [key, source] : keys) io->AddKeyEvent(key, visible_ && !chord && button(source));
     SDL_free(ids);
+  }
+  void OnDraw(ImGuiIO& io) override {
+    PollController(&io);
 #ifdef FM4_INGAME_TOOLS
     fm4::tools::PollDiagnostic(visible_);
     active.store(visible_);
     fm4::tools::DrawToasts();
     if (!visible_) fm4::tools::TrainerClosed();
 #endif
-    if (!visible_) return;
+    if (!visible_) { UpdateAttachment(); return; }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) { Toggle(); return; }
     ImGui::SetNextWindowSize(ImVec2(610, 490), ImGuiCond_FirstUseEver);
     bool tools_drawn = false;
@@ -334,6 +360,7 @@ class Dialog final : public rex::ui::ImGuiDialog {
 #ifdef FM4_INGAME_TOOLS
     if (!visible_ || !tools_drawn) fm4::tools::TrainerClosed();
 #endif
+    UpdateAttachment();
   }
  private:
   bool visible_ = false, chord_ = false, launch_textures_ = true;
@@ -341,6 +368,9 @@ class Dialog final : public rex::ui::ImGuiDialog {
   Request value_;
 };
 std::unique_ptr<Dialog> dialog;
+void PollIdleDialog() {
+  if (dialog) dialog->PollIdle();
+}
 }
 
 bool Take(Request& r) {
@@ -400,9 +430,18 @@ void Attach(rex::ui::Window* window, rex::ui::ImGuiDrawer* drawer, rex::ui::Pres
   auto width = REXCVAR_GET(fm4_live_output_width), height = REXCVAR_GET(fm4_live_output_height);
   if (width && height) { auto initial = Current(); ResizeDisplay(initial); }
   dialog = std::make_unique<Dialog>(drawer);
+  if (REXCVAR_GET(m3_present_lean)) {
+    // Win32 dispatches this callback on the UI thread, including while SDL is
+    // waiting for messages. No worker owns dialog or queues lifetime-sensitive
+    // callbacks. Polling a closed panel must not submit a duplicate game frame.
+    idle_timer = SetTimer(nullptr, 0, 32, [](HWND, UINT, UINT_PTR, DWORD) { PollIdleDialog(); });
+    if (!idle_timer) REXLOG_WARN("FM4 settings idle timer unavailable; retaining continuous redraw");
+    dialog->UpdateAttachment();
+  }
   rex::ui::RegisterBind("bind_fm4_graphics", "F6", "Toggle FM4 graphics settings", [] { if (dialog) dialog->Toggle(); });
 }
 void Detach() {
+  if (idle_timer) { KillTimer(nullptr, idle_timer); idle_timer = 0; }
 #ifdef FM4_INGAME_TOOLS
   fm4::tools::Stop();
 #endif

@@ -17,6 +17,10 @@ REXCVAR_DEFINE_BOOL(n4_native_transform, false, "CPU",
                    "Use the exact scalar native three-component transform leaf")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(m1_native_more, false, "CPU",
+                   "Use exact native exponent, packed decode, lookup and matrix leaves")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace {
 
 uint8_t* NativeBytes(uint8_t* base, uint32_t address) {
@@ -226,6 +230,204 @@ bool NativeTransform(PPCContext& ctx, uint8_t* base) {
   return true;
 }
 
+uint16_t NativeRead16(uint8_t* base, uint32_t address) {
+  uint16_t value;
+  std::memcpy(&value, NativeBytes(base, address), sizeof(value));
+  return std::byteswap(value);
+}
+
+void NativeWrite16(uint8_t* base, uint32_t address, uint16_t value) {
+  value = std::byteswap(value);
+  std::memcpy(NativeBytes(base, address), &value, sizeof(value));
+}
+
+void NativeWrite32(uint8_t* base, uint32_t address, uint32_t value) {
+  value = std::byteswap(value);
+  std::memcpy(NativeBytes(base, address), &value, sizeof(value));
+}
+
+void NativeWrite64(uint8_t* base, uint32_t address, uint64_t value) {
+  value = std::byteswap(value);
+  std::memcpy(NativeBytes(base, address), &value, sizeof(value));
+}
+
+// This is the title's exponent-field operation, including its stack scratch;
+// substituting ldexp would change its treatment of exceptional bit patterns.
+bool NativeSetExponent(PPCContext& ctx, uint8_t* base) {
+  const uint32_t stack = ctx.r1.u32;
+  if (ctx.memory_trace_length || !NativeSpan(stack - 16, 8) ||
+      !NativeSpan(stack + 16, 8)) return false;
+  const uint64_t bits = ctx.f1.u64;
+  const uint32_t sign_fraction = uint32_t(bits >> 48) & 0x800F;
+  ctx.fpscr.disableFlushMode();
+  NativeWrite64(base, stack + 16, bits);
+  ctx.r10.u64 = uint32_t(ctx.r4.u64 + 1022) << 4;
+  ctx.cr0.compare<int32_t>(int32_t(sign_fraction), 0, ctx.xer);
+  ctx.r11.u64 = ctx.r10.u64 | sign_fraction;
+  ctx.f1.u64 = (bits & 0x0000FFFFFFFFFFFFull) | (ctx.r11.u64 << 48);
+  NativeWrite64(base, stack - 16, ctx.f1.u64);
+  ctx.current_function = 0x82300850;
+  ctx.current_instruction = 0x82300870;
+  return true;
+}
+
+bool NativeGetExponent(PPCContext& ctx, uint8_t* base) {
+  const uint32_t scratch = ctx.r1.u32 + 16;
+  if (ctx.memory_trace_length || !NativeSpan(scratch, 8)) return false;
+  ctx.fpscr.disableFlushMode();
+  NativeWrite64(base, scratch, ctx.f1.u64);
+  ctx.r11.s64 = int64_t((ctx.f1.u64 >> 52) & 0x7FF) - 1022;
+  ctx.r3.s64 = ctx.r11.s16;
+  ctx.current_function = 0x82342020;
+  ctx.current_instruction = 0x82342024;
+  return true;
+}
+
+// Normal finite values take the common decomposition path. Zero, subnormals
+// and nonfinite inputs retain the generated normalization/exception path.
+bool NativeSplitExponent(PPCContext& ctx, uint8_t* base) {
+  const uint64_t bits = ctx.f1.u64;
+  const uint32_t exponent = uint32_t(bits >> 52) & 0x7FF;
+  const uint32_t stack = ctx.r1.u32;
+  if (ctx.memory_trace_length || !exponent || exponent == 0x7FF ||
+      !NativeSpan(stack - 16, 8) || !NativeSpan(stack + 16, 8) ||
+      !NativeSpan(ctx.r4.u32, 4) || NativeRead64(base, 0x82001580) != 0)
+    return false;
+  ctx.fpscr.disableFlushMode();
+  NativeWrite64(base, stack + 16, bits);
+  ctx.f0.u64 = 0;
+  ctx.cr6.compare(ctx.f1.f64, ctx.f0.f64);
+  const uint32_t sign_fraction = uint32_t(bits >> 48) & 0x800F;
+  ctx.cr0.compare<int32_t>(int32_t(sign_fraction), 0, ctx.xer);
+  ctx.f1.u64 = (bits & 0x800FFFFFFFFFFFFFull) | 0x3FE0000000000000ull;
+  NativeWrite64(base, stack - 16, ctx.f1.u64);
+  ctx.r10.u64 = exponent;
+  ctx.r11.u64 = exponent;
+  ctx.r9.s64 = int64_t(exponent) - 1022;
+  NativeWrite32(base, ctx.r4.u32, ctx.r9.u32);
+  ctx.current_function = 0x82300758;
+  ctx.current_instruction = 0x82300844;
+  return true;
+}
+
+bool NativePackedDecode(PPCContext& ctx, uint8_t* base) {
+  const uint32_t dest = ctx.r3.u32, source = ctx.r4.u32, table = ctx.r5.u32;
+  if (ctx.memory_trace_length || !NativeSpan(source, 4) ||
+      !NativeSpan(dest, 4) || !NativeSpan(table, 2048)) return false;
+  const uint32_t first = NativeRead16(base, source) >> 6;
+  const uint32_t sum = first + (NativeRead16(base, source + 2) >> 6);
+  const uint32_t end = std::min(sum, 1023u) * 2;
+  const uint32_t begin = first * 2;
+  ctx.cr6.compare<uint32_t>(sum, 1023, ctx.xer);
+  ctx.r9.u64 = (uint32_t(NativeRead16(base, table + begin)) << 6) & 0xFFC0;
+  NativeWrite16(base, dest, ctx.r9.u16);
+  // The first store may alias the lookup table. Preserve both subsequent reads.
+  const uint32_t upper = NativeRead16(base, table + end);
+  ctx.r10.u64 = NativeRead16(base, table + begin);
+  ctx.r11.u64 = ((upper - ctx.r10.u32) << 6) & 0xFFC0;
+  NativeWrite16(base, dest + 2, ctx.r11.u16);
+  ctx.current_function = 0x826F1260;
+  ctx.current_instruction = 0x826F12A8;
+  return true;
+}
+
+bool NativeKeyLookup(PPCContext& ctx, uint8_t* base) {
+  const uint32_t object = ctx.r3.u32;
+  if (ctx.memory_trace_length || !NativeSpan(object, 32)) return false;
+  const uint32_t offset = (NativeRead16(base, object + 28) & 1) ? 68 : 32;
+  const uint32_t count = *NativeBytes(base, object + 31);
+  const uint32_t list = object + offset;
+  if (count && !NativeSpan(list, (count - 1) * 8 + 4)) return false;
+  const uint64_t address = ctx.r3.u64 + offset;
+  uint32_t index = 0, key = 0;
+  for (; index < count; ++index) {
+    key = NativeRead32(base, list + index * 8) >> 5;
+    if (key == ctx.r4.u32) break;
+  }
+  ctx.r9.u64 = count;
+  ctx.r10.u64 = index;
+  ctx.r11.u64 = address + index * 8;
+  ctx.cr0.compare<uint32_t>(count, 0, ctx.xer);
+  if (count) {
+    ctx.r8.u64 = key;
+    if (index < count) ctx.cr6.compare<uint32_t>(key, ctx.r4.u32, ctx.xer);
+    else ctx.cr6.compare<uint32_t>(count, count, ctx.xer);
+  }
+  ctx.r3.u64 = index < count ? ctx.r11.u64 : 0;
+  ctx.current_function = 0x8233C638;
+  ctx.current_instruction = count ? 0x8233C670 : 0x8233C664;
+  return true;
+}
+
+#if defined(__clang__) && (defined(_M_X64) || defined(__x86_64__))
+__attribute__((target("avx,fma")))
+#endif
+bool NativeMatrixVector(PPCContext& ctx, uint8_t* base) {
+  const uint32_t n = ctx.r3.u32, matrix = ctx.r4.u32;
+  const uint32_t vector = ctx.r5.u32, dest = ctx.r6.u32;
+  const uint32_t scratch = ctx.r1.u32 - 16;
+  if (ctx.memory_trace_length || ctx.r3.u64 != n || n > 16 ||
+      !NativeSpan(scratch, 16)) return false;
+  uint32_t matrix_bits[256], vector_bits[16];
+  if (n) {
+    if (ctx.r4.u64 != matrix || ctx.r5.u64 != vector || ctx.r6.u64 != dest ||
+        !NativeSpan(matrix, n * n * 4) || !NativeSpan(vector, n * 4) ||
+        !NativeSpan(dest, n * 4) ||
+        !Disjoint(dest, n * 4, matrix, n * n * 4) ||
+        !Disjoint(dest, n * 4, vector, n * 4) ||
+        !Disjoint(scratch, 16, matrix, n * n * 4) ||
+        !Disjoint(scratch, 16, vector, n * 4) ||
+        !Disjoint(scratch, 16, dest, n * 4)) return false;
+    for (uint32_t i = 0; i < n * n; ++i) {
+      matrix_bits[i] = NativeRead32(base, matrix + i * 4);
+      if ((matrix_bits[i] & 0x7F800000) == 0x7F800000) return false;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+      vector_bits[i] = NativeRead32(base, vector + i * 4);
+      if ((vector_bits[i] & 0x7F800000) == 0x7F800000) return false;
+    }
+  }
+  NativeWrite64(base, scratch, ctx.r30.u64);
+  NativeWrite64(base, scratch + 8, ctx.r31.u64);
+  ctx.r11.u64 = ctx.r6.u64;
+  ctx.cr6.compare<uint32_t>(n, 0, ctx.xer);
+  if (n) {
+    ctx.fpscr.disableFlushMode();
+    for (uint32_t row = 0; row < n; ++row) {
+      const double first = double(std::bit_cast<float>(matrix_bits[row * n]));
+      ctx.f13.f64 = double(std::bit_cast<float>(vector_bits[0]));
+      // Retain every single round and promotion, even on the final column:
+      // promotion of a subnormal can set the host denormal exception flag.
+      volatile double rounded = double(float(first * ctx.f13.f64));
+      double value = rounded;
+      for (uint32_t col = 1; col < n; ++col) {
+        ctx.f13.f64 = value;
+        ctx.f12.f64 = double(std::bit_cast<float>(matrix_bits[row * n + col]));
+        const double element = double(std::bit_cast<float>(vector_bits[col]));
+        rounded = double(float(std::fma(ctx.f12.f64, element, value)));
+        value = rounded;
+      }
+      ctx.f0.f64 = value;
+      NativeWrite32(base, dest + row * 4, std::bit_cast<uint32_t>(float(value)));
+    }
+    ctx.cr6.compare<uint32_t>(n, 1, ctx.xer);
+    ctx.r6.u64 = 0;
+    ctx.r8.u64 = n;
+    ctx.r9.u64 = uint64_t(matrix) + n * n * 4;
+    ctx.r10.u64 = n * n;
+    ctx.r11.u64 = uint64_t(dest) + n * 4;
+    if (n > 1) {
+      ctx.r7.u64 = vector + (n - 1) * 4;
+      ctx.ctr.u64 = 0;
+    }
+    ctx.xer.ca = 1;
+    ctx.cr0.compare<int32_t>(0, 0, ctx.xer);
+  }
+  ctx.current_function = 0x82332930;
+  ctx.current_instruction = 0x823329B8;
+  return true;
+}
+
 }  // namespace
 
 extern "C" REX_FUNC(__imp__sub_827659B0);
@@ -254,3 +456,22 @@ REX_HOOK_RAW(sub_823099C8) {
   }
   __imp__sub_823099C8(ctx, base);
 }
+
+#define NATIVE_MORE_HOOK(address, implementation)                           \
+  extern "C" REX_FUNC(__imp__sub_##address);                                \
+  REX_HOOK_RAW(sub_##address) {                                            \
+    if (REXCVAR_GET(m1_native_more) && ctx.dispatch_address == 0) {          \
+      rex::system::PollCheckpointBoundary(ctx, 0x##address);                \
+      if (implementation(ctx, base)) return;                              \
+    }                                                                     \
+    __imp__sub_##address(ctx, base);                                       \
+  }
+
+NATIVE_MORE_HOOK(82300758, NativeSplitExponent)
+NATIVE_MORE_HOOK(82300850, NativeSetExponent)
+NATIVE_MORE_HOOK(82342020, NativeGetExponent)
+NATIVE_MORE_HOOK(826F1260, NativePackedDecode)
+NATIVE_MORE_HOOK(8233C638, NativeKeyLookup)
+NATIVE_MORE_HOOK(82332930, NativeMatrixVector)
+
+#undef NATIVE_MORE_HOOK

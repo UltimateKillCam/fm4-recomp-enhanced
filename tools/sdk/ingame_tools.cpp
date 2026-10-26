@@ -49,6 +49,7 @@ std::vector<rex::system::AchievementInfo> metadata;
 Json achieved=Json::object();
 std::vector<std::string> backups;
 std::deque<std::string> toasts;
+Clock::time_point toast_until{};
 std::string status="Tools are disabled in this session.";
 std::string restore;
 std::string diagnostic_tab;
@@ -342,12 +343,18 @@ void DrawTabs() {
   std::string text;{std::lock_guard lock(mutex);if(!store)return;text=status;}
   ImGui::TextWrapped("%s",text.c_str());
 }
+bool HasToasts() {
+  if(!REXCVAR_GET(fm4_local_achievements))return false;
+  std::lock_guard lock(mutex);
+  return !toasts.empty() || Clock::now()<toast_until;
+}
 void DrawToasts() {
   if(!REXCVAR_GET(fm4_local_achievements))return;
   static std::string text;static auto until=Clock::time_point{};
   if(Clock::now()>=until) {
     std::lock_guard lock(mutex);text.clear();
     if(!toasts.empty()) {text=toasts.front();toasts.pop_front();until=Clock::now()+std::chrono::seconds(5);}
+    toast_until=until;
   }
   if(text.empty())return;
   auto* viewport=ImGui::GetMainViewport();

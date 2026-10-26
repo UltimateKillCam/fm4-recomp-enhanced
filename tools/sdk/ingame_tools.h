@@ -12,6 +12,7 @@ void Start(rex::system::KernelState* kernel);
 void Stop();
 void DrawTabs();
 void DrawToasts();
+bool HasToasts();
 void TrainerClosed();
 void PollDiagnostic(bool& visible);
 void Package(std::string_view name, const std::filesystem::path& path, bool closed);
