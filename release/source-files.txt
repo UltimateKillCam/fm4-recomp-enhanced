@@ -189,3 +189,4 @@ tools/graphics/pm4_native.h
 tools/graphics/pm4_native.cpp
 tools/sdk/Pm4-Fast.cmake
 tools/sdk/Async-Queue.cmake
+fm4/src/native_audio.cpp

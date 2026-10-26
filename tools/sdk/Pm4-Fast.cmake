@@ -86,9 +86,28 @@ void D3D12CommandProcessor::OnGammaRamp256EntryTableValueWritten()]=]
       {XE_GPU_REG_SHADER_CONSTANT_LOOP_31, Handler::Legacy},
       {uint32_t(RegisterFile::kRegisterCount - 1), Handler::Shadow},
   };
+  // One byte per 256-register page identifies its first side-effect range.
+  // Only pages containing a boundary need a short forward scan. The original
+  // table remains the authority for dispatch and range splitting.
+  static constexpr auto range_pages = [] {
+    std::array<uint8_t, (RegisterFile::kRegisterCount + 255) / 256> pages{};
+    size_t range = 0;
+    for (size_t page = 0; page < pages.size(); ++page) {
+      while (ranges[range].last < page * 256) ++range;
+      pages[page] = uint8_t(range);
+    }
+    return pages;
+  }();
+  const bool direct_ranges = REXCVAR_GET(r2_gpu_fast);
   while (num_registers) {
-    const auto* range = std::lower_bound(std::begin(ranges), std::end(ranges), start_index,
-        [](const Range& range, uint32_t index) { return range.last < index; });
+    const Range* range;
+    if (direct_ranges) {
+      range = ranges + range_pages[start_index >> 8];
+      while (range->last < start_index) ++range;
+    } else {
+      range = std::lower_bound(std::begin(ranges), std::end(ranges), start_index,
+          [](const Range& range, uint32_t index) { return range.last < index; });
+    }
     const uint32_t count = std::min(num_registers, range->last - start_index + 1);
     auto* destination = register_file_->values + start_index;
     switch (range->handler) {

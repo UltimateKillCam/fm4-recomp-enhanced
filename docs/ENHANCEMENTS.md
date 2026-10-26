@@ -160,6 +160,9 @@ Performance overrides (added 2026-10-24, set under `runtime_overrides`, all defa
 | `m1_native_more` | Runs six more of the game's math, table-decode and search helpers as native code, with exact results. |
 | `m2_draw_core` | Caches pipeline and root-signature selection, render-target setup and unchanged system constants between draws. |
 | `m3_present_lean` | Stops redrawing the hidden live-settings overlay every frame and wakes present-driven vblank by event instead of polling. |
+| `r1_native_tier3` | Runs six further game helpers (classification, quantization, vector upload and gather, comparison, matrix conversion) as native code, with exact results. |
+| `r2_gpu_fast` | Replaces the register-range search in native PM4 processing with a constant page index. Use with `n2_pm4_fast`. |
+| `r3_host_lean` | Runs the game's six-channel audio filter with native vector code; output samples and timing are unchanged. |
 | `m4_overlap` | Experimental: earlier command-ring consumption and event-driven register waits. Leave off unless testing. |
 
 

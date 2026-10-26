@@ -15,6 +15,7 @@ set(FM4_SOURCES
     src/main.cpp
     src/hooks.cpp
     src/native_hot.cpp
+    src/native_audio.cpp
     src/native_tiling_hooks.cpp
     src/fm4_app.cpp
 )

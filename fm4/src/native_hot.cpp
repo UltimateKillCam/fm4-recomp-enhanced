@@ -1,6 +1,7 @@
 // Optional native implementations of the title's memory and vector leaves.
 #include <rex/cvar.h>
 #include <rex/hook.h>
+#include <rex/ppc/intrinsics.h>
 #include <rex/system/checkpoint.h>
 
 #include <algorithm>
@@ -19,6 +20,10 @@ REXCVAR_DEFINE_BOOL(n4_native_transform, false, "CPU",
 
 REXCVAR_DEFINE_BOOL(m1_native_more, false, "CPU",
                    "Use exact native exponent, packed decode, lookup and matrix leaves")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(r1_native_tier3, false, "CPU",
+                   "Use exact native numeric, vector upload and data conversion leaves")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace {
@@ -428,6 +433,304 @@ bool NativeMatrixVector(PPCContext& ctx, uint8_t* base) {
   return true;
 }
 
+bool NativeIntegerClass(PPCContext& ctx, uint8_t* base) {
+  const uint32_t scratch = ctx.r1.u32 + 16;
+  const uint64_t input = ctx.f1.u64;
+  if (ctx.memory_trace_length || !NativeSpan(scratch, 8) ||
+      (input & 0x7FF0000000000000ull) == 0x7FF0000000000000ull ||
+      !Disjoint(scratch, 8, 0x82001520, 8)) return false;
+  const uint64_t scale = NativeRead64(base, 0x82001520);
+  if ((scale & 0x7FF0000000000000ull) == 0x7FF0000000000000ull)
+    return false;
+  ctx.fpscr.disableFlushMode();
+  NativeWrite64(base, scratch, input);
+  ctx.r11.u64 = (input >> 48) & 0x7FF0;
+  ctx.cr0.compare<int32_t>(ctx.r11.s32, 0, ctx.xer);
+  ctx.current_function = 0x8230F480;
+  ctx.current_instruction = 0x8230F484;
+  if (!ctx.r11.u32) {
+    ctx.r11.u64 = (input >> 32) & 0xFFFFF;
+    ctx.cr0.compare<int32_t>(ctx.r11.s32, 0, ctx.xer);
+    ctx.current_instruction = 0x8230F490;
+    if (ctx.r11.u32) { ctx.r3.u64 = 0; return true; }
+    ctx.r11.u64 = uint32_t(input);
+    ctx.cr6.compare<uint32_t>(ctx.r11.u32, 0, ctx.xer);
+    ctx.current_instruction = 0x8230F49C;
+    if (ctx.r11.u32) { ctx.r3.u64 = 0; return true; }
+  }
+  ctx.f0.s64 = ctx.f1.f64 > double(INT64_MAX) ? INT64_MAX :
+      simde_mm_cvtsd_si64(simde_mm_load_sd(&ctx.f1.f64));
+  ctx.f0.f64 = double(ctx.f0.s64);
+  ctx.cr6.compare(ctx.f0.f64, ctx.f1.f64);
+  ctx.r3.u64 = 0;
+  if (!ctx.cr6.eq) return true;
+  ctx.r11.s64 = -2113929216;
+  ctx.f0.f64 = ctx.f1.f64 * std::bit_cast<double>(scale);
+  // The second conversion also obeys the inherited host rounding mode.
+  ctx.f13.s64 = std::isnan(ctx.f0.f64) ? INT64_MIN :
+      ctx.f0.f64 > double(INT64_MAX) ? INT64_MAX :
+      simde_mm_cvtsd_si64(simde_mm_load_sd(&ctx.f0.f64));
+  ctx.f13.f64 = double(ctx.f13.s64);
+  ctx.cr6.compare(ctx.f13.f64, ctx.f0.f64);
+  ctx.r3.u64 = ctx.cr6.eq ? 2 : 1;
+  ctx.current_instruction = 0x8230F4BC;
+  return true;
+}
+
+#if defined(__clang__) && (defined(_M_X64) || defined(__x86_64__))
+__attribute__((target("avx,fma")))
+#endif
+bool NativeQuantize16(PPCContext& ctx, uint8_t* base) {
+  const uint32_t scratch = ctx.r1.u32 - 16;
+  if (ctx.memory_trace_length || !NativeSpan(scratch, 8) ||
+      !Disjoint(scratch, 8, 0x82000000, 5508) ||
+      (ctx.f1.u64 & 0x7FF0000000000000ull) == 0x7FF0000000000000ull)
+    return false;
+  const uint32_t addresses[] = {0x82000F48, 0x82000F34, 0x82000DB4, 0x820014B8};
+  uint32_t bits[4];
+  for (unsigned i = 0; i < 4; ++i) {
+    bits[i] = NativeRead32(base, addresses[i]);
+    if ((bits[i] & 0x7F800000) == 0x7F800000) return false;
+  }
+  ctx.fpscr.disableFlushMode();
+  ctx.r11.s64 = ctx.r10.s64 = -2113929216;
+  ctx.f13.f64 = double(std::bit_cast<float>(bits[0]));
+  ctx.cr6.compare(ctx.f1.f64, ctx.f13.f64);
+  if (!ctx.cr6.lt) {
+    ctx.f13.f64 = ctx.f1.f64;
+    ctx.f0.f64 = double(std::bit_cast<float>(bits[1]));
+    ctx.cr6.compare(ctx.f1.f64, ctx.f0.f64);
+    if (!ctx.cr6.gt) ctx.f0.f64 = ctx.f13.f64;
+  } else {
+    ctx.f0.f64 = ctx.f13.f64;
+  }
+  ctx.f13.f64 = double(std::bit_cast<float>(bits[2]));
+  ctx.f12.f64 = double(std::bit_cast<float>(bits[3]));
+  ctx.f0.f64 = double(float(std::fma(ctx.f0.f64, ctx.f13.f64, ctx.f12.f64)));
+  ctx.f0.s64 = std::isnan(ctx.f0.f64) ? INT64_MIN :
+      ctx.f0.f64 > double(INT64_MAX) ? INT64_MAX :
+      simde_mm_cvttsd_si64(simde_mm_load_sd(&ctx.f0.f64));
+  NativeWrite64(base, scratch, ctx.f0.u64);
+  ctx.r3.u64 = ctx.f0.u64 & 0xFFFF;
+  ctx.current_function = 0x82879328;
+  ctx.current_instruction = 0x8287936C;
+  return true;
+}
+
+bool NativeIndirectCompare(PPCContext& ctx, uint8_t* base) {
+  if (ctx.memory_trace_length || !NativeSpan(ctx.r3.u32, 4) ||
+      !NativeSpan(ctx.r4.u32, 4)) return false;
+  const uint32_t a = NativeRead32(base, ctx.r3.u32);
+  const uint32_t b = NativeRead32(base, ctx.r4.u32);
+  if (!NativeSpan(a, 4) || !NativeSpan(b, 4)) return false;
+  const uint32_t aa = NativeRead32(base, a), bb = NativeRead32(base, b);
+  if (aa > 0xFFFFFFAF || bb > 0xFFFFFFAF ||
+      !NativeSpan(aa + 80, 4) || !NativeSpan(bb + 80, 4)) return false;
+  ctx.r11.u64 = NativeRead32(base, aa + 80);
+  ctx.r10.u64 = NativeRead32(base, bb + 80);
+  ctx.r3.u64 = ctx.r10.u64 - ctx.r11.u64;
+  ctx.current_function = 0x822C4918;
+  ctx.current_instruction = 0x822C492C;
+  return true;
+}
+
+void NativeLoadVector(PPCVRegister& dest, uint8_t* base, uint32_t address) {
+  for (unsigned i = 0; i < 16; ++i)
+    dest.u8[i] = NativeBytes(base, address)[15 - i];
+}
+
+bool NativeVectorUpload(PPCContext& ctx, uint8_t* base) {
+  const uint32_t object = ctx.r3.u32, source = ctx.r5.u32, count = ctx.r6.u32;
+  const uint32_t offset = uint32_t(ctx.r4.u32 + 120) << 4;
+  const uint64_t dest64 = uint64_t(object) + offset;
+  if (ctx.memory_trace_length || ctx.r3.u64 != object ||
+      ctx.r5.u64 != source || ctx.r6.u64 != count || count > 4096 ||
+      ((object | source) & 15) || dest64 > 0xFFFFFFFFull ||
+      !NativeSpan(object, 8) || !NativeSpan(uint32_t(dest64), count * 16) ||
+      !NativeSpan(source, count * 16) ||
+      !Disjoint(uint32_t(dest64), count * 16, source, count * 16) ||
+      !Disjoint(object, 8, uint32_t(dest64), count * 16)) return false;
+  const uint32_t dest = uint32_t(dest64), groups = count / 4, tail = count % 4;
+  ctx.r10.u64 = dest64 + count * 16;
+  ctx.r9.u64 = tail;
+  ctx.r8.u64 = groups ? 48 : 128;
+  ctx.r5.u64 = 16;
+  if (groups) {
+    const uint32_t last = source + (groups - 1) * 64;
+    NativeLoadVector(ctx.v63, base, last);
+    NativeLoadVector(ctx.v62, base, last + 16);
+    NativeLoadVector(ctx.v61, base, last + 32);
+    NativeLoadVector(ctx.v60, base, last + 48);
+    ctx.v59 = ctx.v60;
+    ctx.r4.u64 = 64;
+    ctx.r6.u64 = 32;
+  }
+  if (tail) {
+    NativeLoadVector(ctx.v63, base, source + count * 16 - 16);
+    std::memset(&ctx.v62, 0, sizeof(ctx.v62));
+  }
+  if (count) {
+    ctx.ctr.u64 = 0;
+    std::memcpy(NativeBytes(base, dest), NativeBytes(base, source), count * 16);
+  }
+  ctx.cr6.compare<uint32_t>(tail, 0, ctx.xer);
+  ctx.r11.u64 = NativeRead64(base, object) | ctx.r7.u64;
+  NativeWrite64(base, object, ctx.r11.u64);
+  ctx.current_function = 0x823164E0;
+  ctx.current_instruction = 0x823165B0;
+  return true;
+}
+
+bool NativeGatherVector(PPCContext& ctx, uint8_t* base) {
+  const uint32_t scratch = ctx.r1.u32 - 16, dest = ctx.r3.u32 & ~15u;
+  if (ctx.memory_trace_length || (ctx.r1.u32 & 15) ||
+      !NativeSpan(ctx.r4.u32 + 4, 4) || ctx.r4.u32 > 0xFFFFFFFB ||
+      !NativeSpan(scratch, 16) || !NativeSpan(dest, 16)) return false;
+  const uint32_t object = NativeRead32(base, ctx.r4.u32 + 4);
+  if (!NativeSpan(object, 108)) return false;
+  const uint32_t offset = ctx.r5.u32 << 2;
+  const uint32_t pointers[] = {NativeRead32(base, object + 56),
+      NativeRead32(base, object + 104), NativeRead32(base, object + 80)};
+  uint32_t bits[3];
+  for (unsigned i = 0; i < 3; ++i) {
+    const uint64_t address = uint64_t(pointers[i]) + offset;
+    if (address > 0xFFFFFFFFull || !NativeSpan(uint32_t(address), 4)) return false;
+    bits[i] = NativeRead32(base, uint32_t(address));
+    if ((bits[i] & 0x7F800000) == 0x7F800000) return false;
+  }
+  ctx.fpscr.disableFlushMode();
+  ctx.r11.u64 = pointers[2]; ctx.r8.u64 = pointers[0]; ctx.r7.u64 = pointers[1];
+  ctx.r10.u64 = offset; ctx.r9.u64 = ctx.r1.u64 - 16;
+  ctx.f0.f64 = double(std::bit_cast<float>(bits[0]));
+  ctx.f13.f64 = double(std::bit_cast<float>(bits[1]));
+  ctx.f12.f64 = double(std::bit_cast<float>(bits[2]));
+  NativeWrite32(base, scratch, std::bit_cast<uint32_t>(float(ctx.f0.f64)));
+  NativeWrite32(base, scratch + 4, std::bit_cast<uint32_t>(float(ctx.f13.f64)));
+  NativeWrite32(base, scratch + 8, std::bit_cast<uint32_t>(float(ctx.f12.f64)));
+  NativeLoadVector(ctx.v63, base, scratch);
+  std::memmove(NativeBytes(base, dest), NativeBytes(base, scratch), 16);
+  ctx.current_function = 0x822FF5C0;
+  ctx.current_instruction = 0x822FF5EC;
+  return true;
+}
+
+// Keep the single rounding after each scalar operation in the matrix-to-
+// quaternion conversion. A conventional quaternion formula reassociates it.
+#pragma STDC FENV_ACCESS ON
+bool NativeMatrixQuaternion(PPCContext& ctx, uint8_t* base) {
+  const uint32_t stack = ctx.r1.u32, scratch = stack - 16;
+  if (ctx.memory_trace_length || (stack & 15) || !NativeSpan(scratch, 16))
+    return false;
+  uint32_t m[3][3];
+  const uint32_t rows[] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32};
+  for (unsigned row = 0; row < 3; ++row) {
+    if (!NativeSpan(rows[row], 12)) return false;
+    for (unsigned col = 0; col < 3; ++col) {
+      m[row][col] = NativeRead32(base, rows[row] + col * 4);
+      if ((m[row][col] & 0x7F800000) == 0x7F800000) return false;
+    }
+  }
+  const uint32_t addresses[] = {0x82000F48, 0x82000F34, 0x82000EBC,
+                                0x82000F70, 0x82000F30};
+  uint32_t constants[5];
+  for (unsigned i = 0; i < 5; ++i) {
+    constants[i] = NativeRead32(base, addresses[i]);
+    if ((constants[i] & 0x7F800000) == 0x7F800000) return false;
+  }
+  const uint64_t half_bits = NativeRead64(base, 0x820014E0);
+  // These fixed title constants keep unused exceptional intermediates from
+  // acquiring different host flags after scalar register allocation.
+  if (constants[0] != 0 || constants[1] != 0x3F800000 ||
+      constants[2] != 0x40000000 || constants[4] != 0xBF800000 ||
+      (constants[3] != 0x3E800000 && constants[3] != 0x3F000000) ||
+      (half_bits != 0x3FD0000000000000ull &&
+       half_bits != 0x3FE0000000000000ull))
+    return false;
+  ctx.fpscr.disableFlushMode();
+  auto round = [](double value) { return double(float(value)); };
+  auto value = [&](unsigned row, unsigned col) {
+    return double(std::bit_cast<float>(m[row][col]));
+  };
+  double f13 = value(1, 1), f12 = value(2, 2);
+  double f5 = round(f12 + f13);
+  double f11 = value(0, 0), f0 = value(1, 0), f10 = value(2, 0);
+  const double f4 = double(std::bit_cast<float>(constants[0]));
+  double f9 = value(0, 1), f8 = value(2, 1), f7 = value(0, 2), f6 = value(1, 2);
+  f5 = round(f5 + f11);
+  ctx.cr6.compare(f5, f4);
+  if (ctx.cr6.gt) {
+    f9 = round(f9 - f0); f11 = round(f6 - f8); f10 = round(f10 - f7);
+    f13 = double(std::bit_cast<float>(constants[2]));
+    f0 = double(std::bit_cast<float>(constants[1]));
+    f8 = round(f5 + f0);
+    f12 = std::bit_cast<double>(half_bits);
+    f8 = round(std::sqrt(f8));
+    f13 = round(f8 * f13); f8 = round(f0 / f13); f12 = f13 * f12;
+    f11 = round(f11 * f8); f10 = round(f10 * f8); f13 = round(f9 * f8);
+    f12 = round(f12);
+  } else {
+    ctx.cr6.compare(f11, f13);
+    bool first = ctx.cr6.gt;
+    if (first) { ctx.cr6.compare(f11, f12); first = ctx.cr6.gt; }
+    if (first) {
+      f9 = round(f9 + f0); f8 = round(f6 - f8); f7 = round(f7 + f10);
+      f10 = double(std::bit_cast<float>(constants[2]));
+      f0 = double(std::bit_cast<float>(constants[1]));
+      f6 = round(f11 + f0);
+      f11 = double(std::bit_cast<float>(constants[3]));
+      f13 = round(f6 - f13); f13 = round(f13 - f12);
+      f13 = round(std::sqrt(f13)); f13 = round(f13 * f10);
+      f6 = round(f0 / f13); f11 = round(f13 * f11);
+      f12 = round(f8 * f6); f10 = round(f9 * f6); f13 = round(f7 * f6);
+    } else {
+      ctx.cr6.compare(f13, f12);
+      f8 = round(f6 + f8);
+      if (ctx.cr6.gt) {
+        f9 = round(f9 + f0); f0 = double(std::bit_cast<float>(constants[1]));
+        f6 = round(f13 + f0); f13 = double(std::bit_cast<float>(constants[3]));
+        f7 = round(f10 - f7); f10 = double(std::bit_cast<float>(constants[2]));
+        f11 = round(f6 - f11); f12 = round(f11 - f12);
+        f12 = round(std::sqrt(f12)); f12 = round(f12 * f10);
+        f6 = round(f0 / f12); f10 = round(f12 * f13);
+        f12 = round(f7 * f6); f11 = round(f9 * f6); f13 = round(f8 * f6);
+      } else {
+        f9 = round(f9 - f0); f0 = double(std::bit_cast<float>(constants[1]));
+        f6 = round(f12 + f0); f12 = double(std::bit_cast<float>(constants[3]));
+        f7 = round(f7 + f10); f10 = double(std::bit_cast<float>(constants[2]));
+        f11 = round(f6 - f11); f13 = round(f11 - f13);
+        f13 = round(std::sqrt(f13)); f13 = round(f13 * f10);
+        f10 = round(f0 / f13); f13 = round(f13 * f12);
+        f12 = round(f9 * f10); f11 = round(f7 * f10); f10 = round(f8 * f10);
+      }
+    }
+  }
+  f8 = round(f11 - f0); f6 = round(f13 - f0);
+  f7 = round(f10 - f0); f5 = round(f12 - f0);
+  f9 = double(std::bit_cast<float>(constants[4]));
+  f11 = f8 >= 0.0 ? f0 : f11; f13 = f6 >= 0.0 ? f0 : f13;
+  f10 = f7 >= 0.0 ? f0 : f10; f0 = f5 >= 0.0 ? f0 : f12;
+  f12 = round(f11 - f9); f7 = round(f13 - f9);
+  f8 = round(f10 - f9); f6 = round(f0 - f9);
+  f12 = f12 >= 0.0 ? f11 : f9;
+  NativeWrite32(base, scratch, std::bit_cast<uint32_t>(float(f12)));
+  f13 = f7 >= 0.0 ? f13 : f9;
+  NativeWrite32(base, scratch + 8, std::bit_cast<uint32_t>(float(f13)));
+  f12 = f8 >= 0.0 ? f10 : f9;
+  NativeWrite32(base, scratch + 4, std::bit_cast<uint32_t>(float(f12)));
+  f0 = f6 >= 0.0 ? f0 : f9;
+  NativeWrite32(base, scratch + 12, std::bit_cast<uint32_t>(float(f0)));
+  ctx.f0.f64 = f0; ctx.f4.f64 = f4; ctx.f5.f64 = f5; ctx.f6.f64 = f6;
+  ctx.f7.f64 = f7; ctx.f8.f64 = f8; ctx.f9.f64 = f9; ctx.f10.f64 = f10;
+  ctx.f11.f64 = f11; ctx.f12.f64 = f12; ctx.f13.f64 = f13;
+  ctx.r9.s64 = ctx.r11.s64 = -2113929216;
+  ctx.r10.u64 = ctx.r1.u64 - 16;
+  NativeLoadVector(ctx.v1, base, scratch);
+  ctx.current_function = 0x823348C0;
+  ctx.current_instruction = 0x82334AA0;
+  return true;
+}
+#pragma STDC FENV_ACCESS OFF
+
 }  // namespace
 
 extern "C" REX_FUNC(__imp__sub_827659B0);
@@ -475,3 +778,22 @@ NATIVE_MORE_HOOK(8233C638, NativeKeyLookup)
 NATIVE_MORE_HOOK(82332930, NativeMatrixVector)
 
 #undef NATIVE_MORE_HOOK
+
+#define NATIVE_TIER3_HOOK(address, implementation)                          \
+  extern "C" REX_FUNC(__imp__sub_##address);                               \
+  REX_HOOK_RAW(sub_##address) {                                           \
+    if (REXCVAR_GET(r1_native_tier3) && ctx.dispatch_address == 0) {        \
+      rex::system::PollCheckpointBoundary(ctx, 0x##address);               \
+      if (implementation(ctx, base)) return;                             \
+    }                                                                    \
+    __imp__sub_##address(ctx, base);                                      \
+  }
+
+NATIVE_TIER3_HOOK(8230F480, NativeIntegerClass)
+NATIVE_TIER3_HOOK(82879328, NativeQuantize16)
+NATIVE_TIER3_HOOK(823164E0, NativeVectorUpload)
+NATIVE_TIER3_HOOK(822C4918, NativeIndirectCompare)
+NATIVE_TIER3_HOOK(823348C0, NativeMatrixQuaternion)
+NATIVE_TIER3_HOOK(822FF5C0, NativeGatherVector)
+
+#undef NATIVE_TIER3_HOOK
