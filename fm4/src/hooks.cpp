@@ -330,7 +330,7 @@ std::atomic<uint64_t> fm4_pose_sequence{0};
 thread_local uint64_t fm4_inner_steps = 0;
 }
 REXCVAR_DEFINE_BOOL(fm4_time_based_visual_updates, false, "FM4",
-                   "Experimental: use the visual snapshot clock for fixed-60-Hz presentation updates")
+                   "Scale fixed-60-Hz presentation updates by real elapsed time at unlocked frame rates")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace {
@@ -338,7 +338,11 @@ void Fm4VisualUpdateDelta(PPCContext& ctx, uint32_t phase) {
   if (!REXCVAR_GET(fm4_time_based_visual_updates)) return;
   // The presentation registry's two inline paths pass descriptor+8 as delta.
   // 826DA360 constructs that descriptor from the world clock at +616 but
-  // supplies a constant 1/60. Use changes in that same clock, not host FPS.
+  // supplies a constant 1/60, i.e. one 60 Hz frame of presentation time per
+  // update. Scale that by the real time each object has waited instead, so
+  // presentation runs at console speed at any frame rate. Never pass zero:
+  // world-clock differences were zero on repeated snapshots, which left road
+  // detail washed out and streaked.
   const uint32_t caller = uint32_t(ctx.lr);
   if (caller != 0x822CA4D8u && caller != 0x822CA4E4u &&
       caller != 0x822CA60Cu && caller != 0x822CA618u) return;
@@ -346,22 +350,20 @@ void Fm4VisualUpdateDelta(PPCContext& ctx, uint32_t phase) {
   const auto* descriptor = Fm4TimingBytes(ctx.r26.u32, 0, 16);
   if (!descriptor || std::abs(ctx.f1.f64 - 1.0 / 60.0) > 1e-7 ||
       Fm4TimingU32(descriptor + 8) != 0x3C888889u) return;
-  const double clock = std::bit_cast<double>((uint64_t(Fm4TimingU32(descriptor)) << 32) |
-                                            Fm4TimingU32(descriptor + 4));
-  if (!std::isfinite(clock)) return;
-  struct Sample { double clock = 0; bool seen = false; };
+  using Clock = std::chrono::steady_clock;
+  struct Sample { Clock::time_point last; bool seen = false; };
   static thread_local std::map<uint64_t, Sample> samples;
   if (samples.size() > 8192) samples.clear();
   auto& sample = samples[(uint64_t(phase) << 32) | ctx.r3.u32];
+  const auto now = Clock::now();
   double delta = 1.0 / 60.0;
-  if (!sample.seen || std::abs(clock - sample.clock) > 0.2) {
-    sample = {clock, true};
-  } else {
-    // Each object/phase consumes a clock interval once. Repeated rendering of
-    // the same world snapshot must not advance its animation again.
-    delta = clock - sample.clock;
-    sample.clock = clock;
+  if (sample.seen) {
+    // Clamp to 1000 Hz .. 10 Hz: long gaps (loading, menus) restart at a
+    // normal step rather than jumping.
+    delta = std::chrono::duration<double>(now - sample.last).count();
+    delta = delta > 0.1 ? 1.0 / 60.0 : std::max(delta, 1.0 / 1000.0);
   }
+  sample = {now, true};
   ctx.f1.f64 = double(float(delta));
 }
 }
